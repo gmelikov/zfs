@@ -64,8 +64,8 @@ log_onexit cleanup
 target=$TESTPOOL
 
 if is_loop_device $DISK1; then
-	SD=$($LSSCSI | $NAWK '/scsi_debug/ {print $6; exit}')
-	SDDEVICE=$($ECHO $SD | $NAWK -F / '{print $3}')
+	SD=$(lsscsi | nawk '/scsi_debug/ {print $6; exit}')
+	SDDEVICE=$(echo $SD | nawk -F / '{print $3}')
 	SDDEVICE_ID=$(get_persistent_disk_name $SDDEVICE)
 	autoonline_disks="$SDDEVICE"
 else
@@ -75,22 +75,22 @@ fi
 # Clear disk labels
 for i in {0..2}
 do
-	log_must $ZPOOL labelclear -f /dev/disk/by-id/"${devs_id[i]}"
+	log_must zpool labelclear -f /dev/disk/by-id/"${devs_id[i]}"
 done
 
 if is_loop_device $DISK1; then
 	#create a pool with one scsi_debug device and 3 loop devices
-	log_must $ZPOOL create -f $TESTPOOL raidz1 $SDDEVICE_ID $DISK1 \
+	log_must zpool create -f $TESTPOOL raidz1 $SDDEVICE_ID $DISK1 \
 	    $DISK2 $DISK3
 elif ( is_real_device $DISK1 || is_mpath_device $DISK1 ); then
-	log_must $ZPOOL create -f $TESTPOOL raidz1 ${devs_id[0]} \
+	log_must zpool create -f $TESTPOOL raidz1 ${devs_id[0]} \
 	    ${devs_id[1]} ${devs_id[2]}
 else
 	log_fail "Disks are not supported for this test"
 fi
 
 #add some data to the pool
-log_must $MKFILE $FSIZE /$TESTPOOL/data
+log_must mkfile $FSIZE /$TESTPOOL/data
 
 #pool guid import
 typeset guid=$(get_config $TESTPOOL pool_guid)
@@ -100,14 +100,14 @@ fi
 
 for offline_disk in $autoonline_disks
 do
-	log_must $ZPOOL export -F $TESTPOOL
+	log_must zpool export -F $TESTPOOL
 
-	host=$($LS /sys/block/$offline_disk/device/scsi_device | $NAWK -F : '{ print $1}')
+	host=$(ls /sys/block/$offline_disk/device/scsi_device | nawk -F : '{ print $1}')
 	#offline disk
 	on_off_disk $offline_disk "offline"
 
 	#reimport pool with drive missing
-	log_must $ZPOOL import $target
+	log_must zpool import $target
 	check_state $TESTPOOL "" "degraded"
 	if (($? != 0)); then
 		log_fail "$TESTPOOL is not degraded"
@@ -118,25 +118,25 @@ do
 	
 	log_note "Delay for ZED auto-online"
 	typeset -i timeout=0
-	$CAT ${ZEDLET_DIR}/zedlog | \
-	    $EGREP "zfs_iter_vdev: matched devid" > /dev/null
+	cat ${ZEDLET_DIR}/zedlog | \
+	    egrep "zfs_iter_vdev: matched devid" > /dev/null
 	while (($? != 0)); do
 		if ((timeout == $MAXTIMEOUT)); then
 			log_fail "Timeout occured"
 		fi
 		((timeout++))
-		$SLEEP 1
-		$CAT ${ZEDLET_DIR}/zedlog | \
-		    $EGREP "zfs_iter_vdev: matched devid" > /dev/null
+		sleep 1
+		cat ${ZEDLET_DIR}/zedlog | \
+		    egrep "zfs_iter_vdev: matched devid" > /dev/null
 	done
 
 	check_state $TESTPOOL "" "online"
 	if (($? != 0)); then
 		log_fail "$TESTPOOL is not back online"
 	fi
-	$SLEEP 2
+	sleep 2
 done
-log_must $ZPOOL destroy $TESTPOOL
+log_must zpool destroy $TESTPOOL
 
 
 log_pass "Auto-online test successful"

@@ -31,19 +31,19 @@ verify_runnable "global"
 cleanup_devices $DISKS
 
 if [[ -f ${ZEDLET_DIR}/zed.pid ]]; then
-	zedpid=$($CAT ${ZEDLET_DIR}/zed.pid)
-	log_must $KILL $zedpid
+	zedpid=$(cat ${ZEDLET_DIR}/zed.pid)
+	log_must kill $zedpid
 fi
 
-log_must $RM ${ZEDLET_DIR}/all-syslog.sh
-log_must $RM ${ZEDLET_DIR}/zed.pid
-log_must $RM ${ZEDLET_DIR}/zedlog
-log_must $RM ${ZEDLET_DIR}/state
-log_must $RMDIR $ZEDLET_DIR
+log_must rm -f ${ZEDLET_DIR}/all-syslog.sh
+log_must rm -f ${ZEDLET_DIR}/zed.pid
+log_must rm -f ${ZEDLET_DIR}/zedlog
+log_must rm -f ${ZEDLET_DIR}/state
+log_must rmdir $ZEDLET_DIR
 
 if is_loop_device $DISK1; then
-	SD=$($LSSCSI | $NAWK '/scsi_debug/ {print $6; exit}')
-	SDDEVICE=$($ECHO $SD | $NAWK -F / '{print $3}')
+	SD=$(lsscsi | nawk '/scsi_debug/ {print $6; exit}')
+	SDDEVICE=$(echo $SD | nawk -F / '{print $3}')
 
 	if [[ -z $SDDEVICE ]]; then
 		log_pass
@@ -52,7 +52,7 @@ if is_loop_device $DISK1; then
 	on_off_disk $SDDEVICE "offline"
 	block_device_wait
 
-	log_must $MODUNLOAD scsi_debug
+	log_must modprobe -r scsi_debug
 fi
 
 log_pass
