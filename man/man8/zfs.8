@@ -3439,35 +3439,31 @@ property.
 The following permissions are available:
 .Bd -literal
 NAME             TYPE           NOTES
-allow            subcommand     Must also have the permission that is
-                                being allowed
-clone            subcommand     Must also have the 'create' ability and
-                                'mount' ability in the origin file system
+allow            subcommand     Must also have the permission that is being
+                                allowed
+clone            subcommand     Must also have the 'create' ability and 'mount'
+                                ability in the origin file system
 create           subcommand     Must also have the 'mount' ability
 destroy          subcommand     Must also have the 'mount' ability
 diff             subcommand     Allows lookup of paths within a dataset
-                                given an object number, and the ability
-                                to create snapshots necessary to
-                                'zfs diff'.
+                                given an object number, and the ability to
+                                create snapshots necessary to 'zfs diff'.
 mount            subcommand     Allows mount/umount of ZFS datasets
-promote          subcommand     Must also have the 'mount' and 'promote'
-                                ability in the origin file system
-receive          subcommand     Must also have the 'mount' and 'create'
-                                ability
+promote          subcommand     Must also have the 'mount'
+                                and 'promote' ability in the origin file system
+receive          subcommand     Must also have the 'mount' and 'create' ability
 rename           subcommand     Must also have the 'mount' and 'create'
                                 ability in the new parent
 rollback         subcommand     Must also have the 'mount' ability
 send             subcommand
-share            subcommand     Allows sharing file systems over NFS
-                                or SMB protocols
+share            subcommand     Allows sharing file systems over NFS or SMB
+                                protocols
 snapshot         subcommand     Must also have the 'mount' ability
 
-groupquota       other          Allows accessing any groupquota@...
-                                property
+groupquota       other          Allows accessing any groupquota@... property
 groupused        other          Allows reading any groupused@... property
 userprop         other          Allows changing any user property
-userquota        other          Allows accessing any userquota@...
-                                property
+userquota        other          Allows accessing any userquota@... property
 userused         other          Allows reading any userused@... property
 
 aclinherit       property
