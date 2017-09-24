@@ -115,6 +115,7 @@ $(MODULE)-objs += zvol.o
 $(MODULE)-objs += dsl_destroy.o
 $(MODULE)-objs += dsl_userhold.o
 $(MODULE)-objs += qat_compress.o
+$(MODULE)-objs += zstd.o
 
 $(MODULE)-$(CONFIG_X86) += vdev_raidz_math_sse2.o
 $(MODULE)-$(CONFIG_X86) += vdev_raidz_math_ssse3.o

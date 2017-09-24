@@ -128,7 +128,8 @@ KERNEL_C = \
 	zio_compress.c \
 	zio_inject.c \
 	zle.c \
-	zrlock.c
+	zrlock.c \
+	zstd.c
 
 nodist_libzpool_la_SOURCES = \
 	$(USER_C) \
@@ -138,7 +139,8 @@ libzpool_la_LIBADD = \
 	$(top_builddir)/lib/libunicode/libunicode.la \
 	$(top_builddir)/lib/libuutil/libuutil.la \
 	$(top_builddir)/lib/libnvpair/libnvpair.la \
-	$(top_builddir)/lib/libicp/libicp.la
+	$(top_builddir)/lib/libicp/libicp.la \
+	$(top_builddir)/lib/libzstd/libzstd.la
 
 libzpool_la_LIBADD += $(ZLIB) -ldl
 libzpool_la_LDFLAGS = -version-info 2:0:0
