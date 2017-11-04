@@ -19,7 +19,7 @@ install:
 - sh autogen.sh
 - ./configure
 - make pkg
-- rm ./spl-kmod*
+- rm ./spl-kmod* 
 - sudo dpkg -i *.deb
 - cd ..
 - sh autogen.sh
