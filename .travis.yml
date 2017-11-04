@@ -18,14 +18,12 @@ install:
 - git checkout master
 - sh autogen.sh
 - ./configure
-- make pkg
-- rm ./spl-kmod* 
+- make pkg-utils pkg-kmod
 - sudo dpkg -i *.deb
 - cd ..
 - sh autogen.sh
 - ./configure
-- make pkg
-- rm ./zfs-kmod*
+- make pkg-utils pkg-kmod
 - sudo dpkg -i *.deb
 script:
 - travis_wait 50 /usr/share/zfs/zfs-tests.sh -v -T $ZFS_TEST_TAGS
