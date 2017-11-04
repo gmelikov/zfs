@@ -1,0 +1,33 @@
+language: c
+sudo: required
+env:
+  global:
+    - ZFS_TEST_TRAVIS_LOG_MAX_LENGTH=400
+  matrix:
+    - ZFS_TEST_TAGS='acl,atime,bootfs,cache,cachefile,casenorm,chattr,checksum,clean_mirror,cli_root'
+    - ZFS_TEST_TAGS='cli_user,compression,ctime,delegate,devices,events,exec,fault,features,grow_pool,grow_replicas'
+    - ZFS_TEST_TAGS='history,hkdf,inheritance,inuse,large_files,largest_pool,link_count,migration,mmap,mmp,mount,mv_files,nestedfs,no_space,nopwrite,online_offline,pool_names,poolversion,privilege,quota,raidz,redundancy,refquota,refreserv,rename_dirs'
+    - ZFS_TEST_TAGS='replacement,reservation,rootpool,rsend,scrub_mirror,slog,snapshot,snapused,sparse,threadsappend,tmpfile,truncate,upgrade,userquota,vdev_zaps,write_dirs,xattr,zvol,libzfs'
+before_install:
+- sudo apt-get -qq update
+- sudo apt-get install --yes -qq build-essential autoconf libtool gawk alien fakeroot linux-headers-$(uname -r)
+- sudo apt-get install --yes -qq zlib1g-dev uuid-dev libattr1-dev libblkid-dev libselinux-dev libudev-dev libssl-dev
+install:
+- git clone --depth=1 https://github.com/zfsonlinux/spl
+- cd spl
+- git checkout master
+- sh autogen.sh
+- ./configure
+- make pkg
+- rm ./spl-kmod*
+- sudo dpkg -i *.deb
+- cd ..
+- sh autogen.sh
+- ./configure
+- make pkg
+- rm ./zfs-kmod*
+- sudo dpkg -i *.deb
+script:
+- travis_wait 50 /usr/share/zfs/zfs-tests.sh -v -T $ZFS_TEST_TAGS
+after_failure: find /var/tmp/test_results/current/log -type f -name '*' -printf "%f\n" -exec cut -c -$ZFS_TEST_TRAVIS_LOG_MAX_LENGTH {} \;
+after_success: find /var/tmp/test_results/current/log -type f -name '*' -printf "%f\n" -exec cut -c -$ZFS_TEST_TRAVIS_LOG_MAX_LENGTH {} \;
