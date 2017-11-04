@@ -4,10 +4,10 @@ env:
   global:
     - ZFS_TEST_TRAVIS_LOG_MAX_LENGTH=400
   matrix:
-    - ZFS_TEST_TAGS='acl,atime,bootfs,cache,cachefile,casenorm,chattr,checksum,clean_mirror,cli_user,compression,ctime,delegate,devices,events,exec,fault,features,grow_pool,grow_replicas'
-    - ZFS_TEST_TAGS='cli_root'
-    - ZFS_TEST_TAGS='history,hkdf,inheritance,inuse,large_files,largest_pool,link_count,migration,mmap,mmp,mount,mv_files,nestedfs,no_space,nopwrite,online_offline,pool_names,poolversion,privilege,quota,raidz,redundancy,refquota,refreserv,rename_dirs,rsend,snapshot'
-    - ZFS_TEST_TAGS='replacement,reservation,rootpool,scrub_mirror,slog,snapused,sparse,threadsappend,tmpfile,truncate,upgrade,userquota,vdev_zaps,write_dirs,xattr,zvol,libzfs'
+    - ZFS_TEST_TAGS='acl,atime,bootfs,cache,cachefile,casenorm,chattr,checksum,clean_mirror,cli_user,compression,ctime,delegate,devices,events,exec,fault,features,grow_pool,grow_replicas,zdb,zfs,zfs_bookmark,zfs_change-key,zfs_clone,zfs_copies,zfs_create,zfs_destroy,zfs_diff,zfs_get,zfs_inherit,zfs_load-key,zfs_mount,zfs_promote,zfs_property,zfs_receive,zfs_rename,zfs_reservation,zfs_rollback,zfs_send,zfs_set,zfs_share,zfs_snapshot,zfs_unload-key,zfs_unmount,zfs_unshare,zfs_upgrade,zpool,zpool_add,zpool_attach,zpool_clear,zpool_create,zpool_destroy,zpool_detach,zpool_events,zpool_expand,zpool_export,zpool_get,zpool_history,zpool_import'
+    - ZFS_TEST_TAGS='zpool_labelclear,zpool_offline,zpool_online,zpool_remove,zpool_reopen,zpool_replace,zpool_scrub,zpool_set,zpool_status,zpool_sync,zpool_upgrade'
+    - ZFS_TEST_TAGS='history,hkdf,inheritance,inuse,large_files,largest_pool,link_count,migration,mmap,mmp,mount,mv_files,nestedfs,no_space,nopwrite,online_offline,pool_names,poolversion,privilege,quota,raidz,redundancy,refquota,refreserv,rename_dirs,rsend'
+    - ZFS_TEST_TAGS='replacement,reservation,rootpool,scrub_mirror,slog,snapshot,snapused,sparse,threadsappend,tmpfile,truncate,upgrade,userquota,vdev_zaps,write_dirs,xattr,zvol,libzfs'
 before_install:
 - sudo apt-get -qq update
 - sudo apt-get install --yes -qq build-essential autoconf libtool gawk alien fakeroot linux-headers-$(uname -r)
