@@ -22,15 +22,11 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
- */
-/*
  * Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
- */
-
-/*
  * Copyright (c) 2013, 2018 by Delphix. All rights reserved.
  * Copyright (c) 2019, Klara Inc.
  * Copyright (c) 2019, Allan Jude
+ * Copyright (c) 2021 by George Melikov. All rights reserved.
  */
 
 #include <sys/zfs_context.h>
@@ -124,7 +120,7 @@ zio_compress_zeroed_cb(void *data, size_t len, void *private)
 
 size_t
 zio_compress_data(enum zio_compress c, abd_t *src, void *dst, size_t s_len,
-    uint8_t level)
+    uint8_t level, int compress_threshold)
 {
 	size_t c_len, d_len;
 	uint8_t complevel;
@@ -143,8 +139,24 @@ zio_compress_data(enum zio_compress c, abd_t *src, void *dst, size_t s_len,
 	if (c == ZIO_COMPRESS_EMPTY)
 		return (s_len);
 
-	/* Compress at least 12.5% */
-	d_len = s_len - (s_len >> 3);
+	/*
+	 * If data was compressed and passed ratio checks before -
+	 * we can skip these checks for reproducible results,
+	 * so set compress_threshold=0 for reproducibility of ARC checks.
+	 */
+	if (compress_threshold > 0) {
+		/* Data is already less or equal to compress threshold */
+		if (s_len <= compress_threshold)
+			return (s_len);
+
+		/*
+		 * Write compressed only if there is at least
+		 * one sector compressed
+		 */
+		d_len = s_len - compress_threshold;
+	} else {
+		d_len = s_len;
+	}
 
 	complevel = ci->ci_level;
 
@@ -169,7 +181,6 @@ zio_compress_data(enum zio_compress c, abd_t *src, void *dst, size_t s_len,
 	if (c_len > d_len)
 		return (s_len);
 
-	ASSERT3U(c_len, <=, d_len);
 	return (c_len);
 }
 

@@ -25,6 +25,7 @@
  * Copyright (c) 2017, Intel Corporation.
  * Copyright (c) 2019, Klara Inc.
  * Copyright (c) 2019, Allan Jude
+ * Copyright (c) 2021 by George Melikov. All rights reserved.
  */
 
 #include <sys/sysmacros.h>
@@ -1744,7 +1745,7 @@ zio_write_compress(zio_t *zio)
 		 * to a hole.
 		 */
 		psize = zio_compress_data(ZIO_COMPRESS_EMPTY,
-		    zio->io_abd, NULL, lsize, zp->zp_complevel);
+		    zio->io_abd, NULL, lsize, zp->zp_complevel, 0);
 		if (psize == 0 || psize >= lsize)
 			compress = ZIO_COMPRESS_OFF;
 	} else {
