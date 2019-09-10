@@ -2,6 +2,7 @@
 .\" Copyright (c) 2013 by Turbo Fredriksson <turbo@bayour.com>. All rights reserved.
 .\" Copyright (c) 2019 by Delphix. All rights reserved.
 .\" Copyright (c) 2019 Datto Inc.
+.\" Copyright (c) 2019 by George Melikov <mail@gmelikov.ru>. All rights reserved.
 .\" The contents of this file are subject to the terms of the Common Development
 .\" and Distribution License (the "License").  You may not use this file except
 .\" in compliance with the License. You can obtain a copy of the license at
@@ -1095,6 +1096,22 @@ latency to avoid significantly impacting the latency of each individual
 transaction record (itx).
 .sp
 Default value: \fB5\fR%.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_compress_threshold_bytes\fR (int)
+.ad
+.RS 12n
+This controls the threshold of block compressing ratio which must be exceeded to
+write a block on disk compressed, otherwise it will be writted uncompressed
+to save processor time on decompress.
+Because of disk sector size there is a minimal block size, so if we can compress
+data smaller than this size, full sector block will be allocated against 
+compression gains.
+.sp
+Default value: \fB512\fR.
 .RE
 
 .sp

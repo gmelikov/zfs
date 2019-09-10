@@ -22,13 +22,9 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
- */
-/*
  * Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
- */
-
-/*
  * Copyright (c) 2013, 2018 by Delphix. All rights reserved.
+ * Copyright (c) 2019 by George Melikov. All rights reserved.
  */
 
 #include <sys/zfs_context.h>
@@ -42,6 +38,9 @@
  * an undetected memory error.
  */
 unsigned long zio_decompress_fail_fraction = 0;
+
+/* Compression threshold, default size is a common disk sector size. */
+unsigned long zfs_compress_threshold_bytes = 512;
 
 /*
  * Compression vectors.
@@ -120,8 +119,12 @@ zio_compress_data(enum zio_compress c, abd_t *src, void *dst, size_t s_len)
 	if (c == ZIO_COMPRESS_EMPTY)
 		return (s_len);
 
-	/* Compress at least 12.5% */
-	d_len = s_len - (s_len >> 3);
+	/* Data is already less or equal to compress threshold */
+	if (s_len <= zfs_compress_threshold_bytes)
+		return (s_len);
+
+	/* Write compressed only if there is at least one sector compressed */
+	d_len = s_len - MIN(s_len, zfs_compress_threshold_bytes);
 
 	/* No compression algorithms can read from ABDs directly */
 	void *tmp = abd_borrow_buf_copy(src, s_len);
@@ -131,7 +134,6 @@ zio_compress_data(enum zio_compress c, abd_t *src, void *dst, size_t s_len)
 	if (c_len > d_len)
 		return (s_len);
 
-	ASSERT3U(c_len, <=, d_len);
 	return (c_len);
 }
 
@@ -166,3 +168,10 @@ zio_decompress_data(enum zio_compress c, abd_t *src, void *dst,
 
 	return (ret);
 }
+
+#if defined(_KERNEL)
+/* BEGIN CSTYLED */
+module_param(zfs_compress_threshold_bytes, ulong, 0644);
+MODULE_PARM_DESC(zfs_compress_threshold_bytes, "Compression threshold, bytes.");
+/* END CSTYLED */
+#endif
