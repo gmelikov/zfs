@@ -1380,7 +1380,7 @@ do_corrective_recv(struct receive_writer_arg *rwa, struct drr_write *drrw,
 		    B_FALSE);
 		uint64_t csize = zio_compress_data(BP_GET_COMPRESS(bp),
 		    abd, abd_to_buf(cabd), abd_get_size(abd),
-		    rwa->os->os_complevel);
+		    rwa->os->os_complevel, 0);
 		abd_zero_off(cabd, csize, BP_GET_PSIZE(bp) - csize);
 		/* Swap in newly compressed data into the abd */
 		abd_free(abd);
