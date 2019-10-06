@@ -93,12 +93,8 @@ zio_compress_select(spa_t *spa, enum zio_compress child,
 static int
 zio_compress_zeroed_cb(void *data, size_t len, void *private)
 {
-	uint64_t *end = (uint64_t *)((char *)data + len);
-	for (uint64_t *word = (uint64_t *)data; word < end; word++)
-		if (*word != 0)
-			return (1);
-
-	return (0);
+	return *(uint64_t*)data || memcmp(data, data+sizeof(uint64_t),
+	    len-sizeof(uint64_t));
 }
 
 size_t
