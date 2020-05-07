@@ -1754,8 +1754,7 @@ arc_hdr_authenticate(arc_buf_hdr_t *hdr, spa_t *spa, uint64_t dsobj)
 		tmpbuf = zio_buf_alloc(lsize);
 		abd = abd_get_from_buf(tmpbuf, lsize);
 		abd_take_ownership_of_buf(abd, B_TRUE);
-
-		csize = zio_compress_data(HDR_GET_COMPRESS(hdr),
+		csize = zio_compress_data_legacy(HDR_GET_COMPRESS(hdr),
 		    hdr->b_l1hdr.b_pabd, tmpbuf, lsize, 0);
 		ASSERT3U(csize, <=, psize);
 		abd_zero_off(abd, csize, psize - csize);

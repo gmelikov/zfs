@@ -119,11 +119,11 @@ zio_compress_data(enum zio_compress c, abd_t *src, void *dst, size_t s_len,
 
 	/*
 	 * If data was compressed and passed ratio checks before -
-	 * we can skip these checks for reproducible results,
-	 * so set compress_threshold=0 for reproducibility of ARC checks.
+	 * we can skip these checks for reproducible results, so set
+	 * compress_threshold=0 for reproducibility of ARC checks.
 	 */
 	if (compress_threshold > 0) {
-		/* Data is already less or equal to compress threshold */
+		/* Data is already less or equal to threshold */
 		if (s_len <= compress_threshold)
 			return (s_len);
 
@@ -176,4 +176,22 @@ zio_decompress_data(enum zio_compress c, abd_t *src, void *dst,
 		ret = SET_ERROR(EINVAL);
 
 	return (ret);
+}
+
+/*
+ * Use this wrapper only for backward compatibility with
+ * pre-SPA_FEATURE_COMPRESS_THRESHOLD feature flag.
+ */
+size_t
+zio_compress_data_legacy(spa_t *spa, enum zio_compress c,
+    abd_t *src, void *dst, size_t s_len, int compress_threshold)
+{
+	if (spa_feature_is_active(spa, SPA_FEATURE_COMPRESS_THRESHOLD)) {
+		return zio_compress_data(c, src, dst, s_len,
+		    compress_threshold);
+	} else {
+		/* Compress at least 12.5% */
+		return zio_compress_data(c, src, dst, s_len,
+		    s_len - (s_len >> 3));
+	}
 }

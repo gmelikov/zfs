@@ -30,6 +30,7 @@
 #define	_SYS_ZIO_COMPRESS_H
 
 #include <sys/abd.h>
+#include <sys/spa.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -116,6 +117,8 @@ extern int zio_decompress_data(enum zio_compress c, abd_t *src, void *dst,
     size_t s_len, size_t d_len);
 extern int zio_decompress_data_buf(enum zio_compress c, void *src, void *dst,
     size_t s_len, size_t d_len);
+extern size_t zio_compress_data_legacy(spa_t *spa, enum zio_compress c,
+    abd_t *src, void *dst, size_t s_len, int compress_threshold);
 
 #ifdef	__cplusplus
 }
