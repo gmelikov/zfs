@@ -8963,7 +8963,7 @@ l2arc_apply_transforms(spa_t *spa, arc_buf_hdr_t *hdr, uint64_t asize,
 		tmp = abd_borrow_buf(cabd, asize);
 
 		psize = zio_compress_data(compress, to_write, tmp, size,
-		    hdr->b_complevel, 1 << spa->spa_max_ashift);
+		    hdr->b_complevel, 0);
 
 		if (psize >= size) {
 			abd_return_buf(cabd, tmp, asize);
@@ -10432,7 +10432,7 @@ l2arc_log_blk_commit(l2arc_dev_t *dev, zio_t *pio, l2arc_write_callback_t *cb)
 	/* try to compress the buffer */
 	psize = zio_compress_data(ZIO_COMPRESS_LZ4,
 	    abd_buf->abd, tmpbuf, sizeof (*lb), 0,
-	    1 << dev->l2ad_spa->spa_max_ashift);
+	    1 << dev->l2ad_vdev->vdev_ashift);
 
 	/* a log block is never entirely zero */
 	ASSERT(psize != 0);
