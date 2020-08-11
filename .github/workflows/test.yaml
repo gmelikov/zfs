@@ -1,0 +1,24 @@
+name: stylecheck
+
+on: [pull_request]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v1
+    - name: Install dependencies
+      run: |
+        sudo apt-get install --yes -qq build-essential autoconf libtool gawk alien fakeroot linux-headers-$(uname -r)
+        sudo apt-get install --yes -qq zlib1g-dev uuid-dev libattr1-dev libblkid-dev libselinux-dev libudev-dev libssl-dev python-dev python-setuptools python-cffi python3 python3-dev python3-setuptools python3-cffi
+        # packages for tests
+        sudo apt-get install --yes -qq parted lsscsi ksh attr acl nfs-kernel-server fio
+    - name: Prepare
+      run: |
+        sh ./autogen.sh
+        ./configure
+        #make --no-print-directory -s pkg-utils pkg-kmod
+        #sudo dpkg -i *.deb
+    - name: checkstyle
+      run: |
+        make checkstyle
