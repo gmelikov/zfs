@@ -43,7 +43,7 @@ static taskq_t *vdev_file_taskq;
 void
 vdev_file_init(void)
 {
-	vdev_file_taskq = taskq_create("z_vdev_file", MAX(max_ncpus, 16),
+	   vdev_file_taskq = taskq_create("z_vdev_file", MAX(max_ncpus, 16),
 	    minclsyspri, max_ncpus, INT_MAX, 0);
 }
 
