@@ -8,6 +8,9 @@ jobs:
   checkstyle:
     runs-on: ubuntu-latest
     steps:
+    - uses: actions/checkout@v2
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
     - name: Install dependencies
       run: |
         sudo apt-get update
@@ -19,6 +22,7 @@ jobs:
         sudo -E pip --quiet install flake8
     - name: Prepare
       run: |
+        ls -lah ./
         sh ./autogen.sh
         ./configure
     - name: Checkstyle
