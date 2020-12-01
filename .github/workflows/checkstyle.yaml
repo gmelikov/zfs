@@ -2,15 +2,12 @@ name: checkstyle
 
 on:
   push:
-  pull_request_target:
+  pull_request:
 
 jobs:
   checkstyle:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
-      with:
-        ref: ${{ github.event.pull_request.head.sha }}
     - name: Install dependencies
       run: |
         sudo apt-get update
