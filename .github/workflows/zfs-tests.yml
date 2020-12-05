@@ -3,6 +3,12 @@ name: zfs-tests
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      tests_tag:
+        description: Run only tests with specified tag
+        default: functional
+        required: false
 
 jobs:
   tests:
