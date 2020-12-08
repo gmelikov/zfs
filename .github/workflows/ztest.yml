@@ -1,0 +1,59 @@
+name: ztest
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    env:
+      TEST_DIR: /var/tmp/zloop
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install --yes -qq build-essential autoconf libtool gdb \
+          git alien fakeroot \
+          zlib1g-dev uuid-dev libblkid-dev libselinux-dev \
+          xfslibs-dev libattr1-dev libacl1-dev libudev-dev libdevmapper-dev \
+          libssl-dev libffi-dev libaio-dev libelf-dev libmount-dev \
+          libpam0g-dev
+    - name: Autogen.sh
+      run: |
+        sh autogen.sh
+    - name: Configure
+      run: |
+        ./configure --enable-debug --enable-debuginfo
+    - name: Make
+      run: |
+        make --no-print-directory -s pkg-utils pkg-kmod
+    - name: Install
+      run: |
+        sudo dpkg -i *.deb
+        # Update order of directories to search for modules, otherwise
+        #   Ubuntu will load kernel-shipped ones.
+        sudo sed -i.bak 's/updates/extra updates/' /etc/depmod.d/ubuntu.conf
+        sudo depmod
+        sudo modprobe zfs
+    - name: Tests
+      run: |
+        sudo mkdir -p $TEST_DIR
+        # run for 20 minutes to have a total runner time of 30 minutes
+        sudo /usr/share/zfs/zloop.sh -t 1200 -l -m1 -f $TEST_DIR -c $TEST_DIR/core
+    - name: Prepare artifacts
+      if: failure()
+      run: |
+        sudo echo rm -rf $TEST_DIR/*/vdev
+        sudo dmesg | sudo dd of=$TEST_DIR/dmesg
+        sudo cp /var/log/syslog $TEST_DIR/
+        sudo chmod +r -R $TEST_DIR/
+    - uses: actions/upload-artifact@v2
+      if: failure()
+      with:
+        name: Test logs
+        path: /var/tmp/zloop
+        if-no-files-found: ignore
