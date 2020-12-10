@@ -49,7 +49,6 @@ jobs:
     - name: Prepare artifacts
       if: failure()
       run: |
-        sudo echo rm -rf $TEST_DIR/*/vdev
         sudo dmesg | sudo dd of=$TEST_DIR/dmesg
         sudo cp /var/log/syslog $TEST_DIR/
         sudo chmod +r -R $TEST_DIR/
@@ -57,5 +56,7 @@ jobs:
       if: failure()
       with:
         name: Test logs
-        path: /var/tmp/zloop
+        path: |
+          /var/tmp/zloop/*/
+          !/var/tmp/zloop/*/vdev/
         if-no-files-found: ignore
