@@ -25,6 +25,8 @@ jobs:
     - name: Configure
       run: |
         ./configure --enable-debug --enable-debuginfo --enable-asan --enable-ubsan --with-config=dist
+    - name: Setup tmate session
+      uses: mxschmitt/action-tmate@v3
     - name: Make
       run: |
         make -j$(nproc) --no-print-directory --silent pkg-utils pkg-kmod
@@ -59,6 +61,11 @@ jobs:
         /usr/share/zfs/zfs-tests.sh -vKR -s 3G -r sanity | scripts/zfs-tests-color.sh
       shell: bash
       timeout-minutes: 330
+    - name: Check2
+      if: failure()
+      run: |
+        grep kmod-zfs-devel -R
+        scripts/kmodtool --target x86_64 --kmodname zfs-kmod --newest --devel --for-kernels $(uname -r)
     - name: Prepare artifacts
       if: failure()
       run: |
