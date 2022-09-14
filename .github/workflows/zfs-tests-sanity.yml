@@ -19,6 +19,34 @@ jobs:
         sudo apt-get update
         xargs --arg-file=${{ github.workspace }}/.github/workflows/build-dependencies.txt sudo apt-get install -qq
         sudo apt-get clean
+    - name: bisect
+      run: |
+        cat <<EOF > ../repro.sh
+        #!/bin/sh
+        git clean -d -x -f
+        git reset --hard
+        sh ./autogen.sh
+        ./configure --enable-debug --enable-debuginfo --enable-asan --enable-ubsan
+        make -j$(nproc) --no-print-directory --silent pkg-utils pkg-kmod
+        EOF
+        cat <<EOF > ../bisect.sh
+        #!/bin/sh
+        git bisect start
+        git bisect bad
+        git bisect good bf3fffe70de5dd905d315ab022a373296f5fd94b
+        # bf3fffe70de5dd905d315ab022a373296f5fd94b
+        # sec d98a67a53a180bd88ec8d9aeea75d92e1c9968b5
+        git bisect run ../repro.sh
+        EOF
+        chmod +x ../repro.sh
+        chmod +x ../bisect.sh
+        cat ../repro.sh
+        cat ../bisect.sh
+        git fetch
+        git checkout master
+        git pull
+        git log | head -n100
+        ../bisect.sh
     - name: Autogen.sh
       run: |
         ./autogen.sh
