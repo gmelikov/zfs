@@ -28,6 +28,8 @@ jobs:
     - name: Make
       run: |
         make -j$(nproc) --no-print-directory --silent pkg-utils pkg-kmod
+    - name: Setup tmate session
+      uses: mxschmitt/action-tmate@v3
     - name: Install
       run: |
         sudo dpkg -i *.deb
