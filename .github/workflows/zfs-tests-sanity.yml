@@ -76,3 +76,40 @@ jobs:
           /var/tmp/test_results/*
           !/var/tmp/test_results/current
         if-no-files-found: ignore
+  tests-freebsd:
+    runs-on: macos-12
+    steps:
+    - uses: actions/checkout@v2
+    - name: Test in FreeBSD
+      uses: vmactions/freebsd-vm@v0
+      with:
+        usesh: true
+        prepare: |
+          pkg install -y \
+            curl \
+            autoconf \
+            automake \
+            autotools \
+            git \
+            fio \
+            ksh93 \
+            pamtester \
+            python27 \
+            gmake \
+            sudo
+
+          pw useradd buildbot
+          echo "buildbot ALL=(ALL) NOPASSWD: ALL" \
+              >/usr/local/etc/sudoers.d/buildbot
+        run: |
+          pwd
+          ls -lah
+          whoami
+          env
+          freebsd-version
+          su - buildbot
+          ./autogen.sh
+          ./configure --enable-debug --enable-debuginfo
+          gmake -j`sysctl -n hw.ncpu`
+          sudo gmake install
+          ./scripts/zfs-tests.sh -vKR -s 3G -r sanity | scripts/zfs-tests-color.sh
