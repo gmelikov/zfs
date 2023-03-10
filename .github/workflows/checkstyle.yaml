@@ -5,7 +5,7 @@ on:
   pull_request:
 
 env:
-  FORCE_GENERATE_ABI: false
+  FORCE_GENERATE_ABI: true
 
 jobs:
   checkstyle:
