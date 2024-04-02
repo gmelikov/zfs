@@ -120,14 +120,11 @@ zio_compress_zeroed_cb(void *data, size_t len, void *private)
 	return (0);
 }
 
-/*
- * Set compress_threshold=0 for reproducibility of ARC checks.
- */
 size_t
 zio_compress_data(enum zio_compress c, abd_t *src, void **dst, size_t s_len,
-    uint8_t level, int compress_threshold)
+    uint8_t level, size_t max_size)
 {
-	size_t c_len, d_len;
+	size_t c_len;
 	uint8_t complevel;
 	zio_compress_info_t *ci = &zio_compress_table[c];
 
@@ -143,20 +140,6 @@ zio_compress_data(enum zio_compress c, abd_t *src, void **dst, size_t s_len,
 
 	if (c == ZIO_COMPRESS_EMPTY)
 		return (s_len);
-
-	/*
-	 * Usable compression thresholds are:
-	 * - less than BPE_PAYLOAD_SIZE (embedded_data feature)
-	 * - at least one saved sector
-	 * - minimun 12.5% should be saved (legacy value)
-	 */
-	if (compress_threshold > 0) {
-		d_len = MAX(BPE_PAYLOAD_SIZE,
-		    s_len - MAX(s_len % compress_threshold, s_len >> 3));
-	} else {
-		/* Special case for reproducibility of ARC checks */
-		d_len = s_len;
-	}
 
 	complevel = ci->ci_level;
 
@@ -178,10 +161,10 @@ zio_compress_data(enum zio_compress c, abd_t *src, void **dst, size_t s_len,
 
 	/* No compression algorithms can read from ABDs directly */
 	void *tmp = abd_borrow_buf_copy(src, s_len);
-	c_len = ci->ci_compress(tmp, *dst, s_len, d_len, complevel);
+	c_len = ci->ci_compress(tmp, *dst, s_len, max_size, complevel);
 	abd_return_buf(src, tmp, s_len);
 
-	if (c_len > d_len)
+	if (c_len > max_size)
 		return (s_len);
 
 	return (c_len);

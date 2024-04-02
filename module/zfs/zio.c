@@ -1675,6 +1675,20 @@ zio_roundup_alloc_size(spa_t *spa, uint64_t size)
 	return (spa->spa_min_alloc);
 }
 
+static size_t
+zio_get_compression_max_size(spa_t *spa, size_t s_len)
+{
+	size_t d_len;
+
+	// minimun 12.5% should be saved (legacy value, may be changed later)
+	d_len = s_len - (s_len >> 3);
+
+	d_len = d_len - d_len % spa->spa_gcd_alloc;
+	if (d_len < spa->spa_min_alloc)
+		return (BPE_PAYLOAD_SIZE);
+	return (d_len);
+}
+
 /*
  * ==========================================================================
  * Prepare to read and write logical blocks
@@ -1851,7 +1865,8 @@ zio_write_compress(zio_t *zio)
 	    !(zio->io_flags & ZIO_FLAG_RAW_COMPRESS)) {
 		void *cbuf = NULL;
 		psize = zio_compress_data(compress, zio->io_abd, &cbuf, lsize,
-		    zp->zp_complevel, spa->spa_gcd_alloc);
+		    zp->zp_complevel,
+		    zio_get_compression_max_size(spa, lsize));
 		if (psize == 0) {
 			compress = ZIO_COMPRESS_OFF;
 		} else if (psize >= lsize) {
@@ -1916,7 +1931,7 @@ zio_write_compress(zio_t *zio)
 		 * to a hole.
 		 */
 		psize = zio_compress_data(ZIO_COMPRESS_EMPTY,
-		    zio->io_abd, NULL, lsize, zp->zp_complevel, 0);
+		    zio->io_abd, NULL, lsize, zp->zp_complevel, lsize);
 		if (psize == 0 || psize >= lsize)
 			compress = ZIO_COMPRESS_OFF;
 	} else if (zio->io_flags & ZIO_FLAG_RAW_COMPRESS &&

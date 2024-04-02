@@ -1787,7 +1787,8 @@ arc_hdr_authenticate(arc_buf_hdr_t *hdr, spa_t *spa, uint64_t dsobj)
 	    !HDR_COMPRESSION_ENABLED(hdr)) {
 
 		csize = zio_compress_data(HDR_GET_COMPRESS(hdr),
-		    hdr->b_l1hdr.b_pabd, &tmpbuf, lsize, hdr->b_complevel, 0);
+		    hdr->b_l1hdr.b_pabd, &tmpbuf, lsize, hdr->b_complevel,
+		    lsize);
 		ASSERT3P(tmpbuf, !=, NULL);
 		ASSERT3U(csize, <=, psize);
 		abd = abd_get_from_buf(tmpbuf, lsize);
@@ -8946,7 +8947,7 @@ l2arc_apply_transforms(spa_t *spa, arc_buf_hdr_t *hdr, uint64_t asize,
 		tmp = abd_borrow_buf(cabd, bufsize);
 
 		psize = zio_compress_data(compress, to_write, &tmp, size,
-		    hdr->b_complevel, 0);
+		    hdr->b_complevel, size);
 
 		if (psize >= asize) {
 			psize = HDR_GET_PSIZE(hdr);
