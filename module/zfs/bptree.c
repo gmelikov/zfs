@@ -64,7 +64,7 @@ bptree_alloc(objset_t *os, dmu_tx_t *tx)
 	 */
 	VERIFY3U(0, ==, dmu_bonus_hold(os, obj, FTAG, &db));
 	dmu_buf_will_dirty(db, tx);
-	bt = db->db_data;
+	bt = abd_to_buf(db->db_abd);
 	bt->bt_begin = 0;
 	bt->bt_end = 0;
 	bt->bt_bytes = 0;
@@ -82,7 +82,7 @@ bptree_free(objset_t *os, uint64_t obj, dmu_tx_t *tx)
 	bptree_phys_t *bt;
 
 	VERIFY3U(0, ==, dmu_bonus_hold(os, obj, FTAG, &db));
-	bt = db->db_data;
+	bt = abd_to_buf(db->db_abd);
 	ASSERT3U(bt->bt_begin, ==, bt->bt_end);
 	ASSERT0(bt->bt_bytes);
 	ASSERT0(bt->bt_comp);
@@ -100,7 +100,7 @@ bptree_is_empty(objset_t *os, uint64_t obj)
 	boolean_t rv;
 
 	VERIFY0(dmu_bonus_hold(os, obj, FTAG, &db));
-	bt = db->db_data;
+	bt = abd_to_buf(db->db_abd);
 	rv = (bt->bt_begin == bt->bt_end);
 	dmu_buf_rele(db, FTAG);
 	return (rv);
@@ -122,7 +122,7 @@ bptree_add(objset_t *os, uint64_t obj, blkptr_t *bp, uint64_t birth_txg,
 	ASSERT(dmu_tx_is_syncing(tx));
 
 	VERIFY3U(0, ==, dmu_bonus_hold(os, obj, FTAG, &db));
-	bt = db->db_data;
+	bt = abd_to_buf(db->db_abd);
 
 	bte = kmem_zalloc(sizeof (*bte), KM_SLEEP);
 	bte->be_birth_txg = birth_txg;
@@ -195,7 +195,7 @@ bptree_iterate(objset_t *os, uint64_t obj, boolean_t free, bptree_itor_t func,
 	if (free)
 		dmu_buf_will_dirty(db, tx);
 
-	ba.ba_phys = db->db_data;
+	ba.ba_phys = abd_to_buf(db->db_abd);
 	ba.ba_free = free;
 	ba.ba_func = func;
 	ba.ba_arg = arg;

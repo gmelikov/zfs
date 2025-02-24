@@ -891,7 +891,7 @@ abd_iter_advance(struct abd_iter *aiter, size_t amount)
  * has already exhausted, in which case this does nothing.
  */
 void
-abd_iter_map(struct abd_iter *aiter)
+abd_iter_map_impl(struct abd_iter *aiter, boolean_t nonatomic)
 {
 	void *paddr;
 	size_t offset = 0;
@@ -920,10 +920,22 @@ abd_iter_map(struct abd_iter *aiter)
 			aiter->iter_mapsize = MIN(aiter->iter_mapsize,
 			    PAGE_SIZE - offset);
 		}
-		paddr = zfs_kmap_local(page);
+#ifndef HAVE_KMAP_LOCAL_PAGE
+		if (nonatomic)
+			paddr = zfs_kmap(page);
+		else
+#endif
+			paddr = zfs_kmap_local(page);
+
 	}
 
 	aiter->iter_mapaddr = (char *)paddr + offset;
+}
+
+void
+abd_iter_map(struct abd_iter *aiter)
+{
+	return (abd_iter_map_impl(aiter, B_FALSE));
 }
 
 /*
@@ -931,7 +943,7 @@ abd_iter_map(struct abd_iter *aiter)
  * has already exhausted, in which case this does nothing.
  */
 void
-abd_iter_unmap(struct abd_iter *aiter)
+abd_iter_unmap_impl(struct abd_iter *aiter, boolean_t nonatomic)
 {
 	/* There's nothing left to unmap, so do nothing */
 	if (abd_iter_at_end(aiter))
@@ -945,7 +957,12 @@ abd_iter_unmap(struct abd_iter *aiter)
 			offset &= PAGE_SIZE - 1;
 
 		/* LINTED E_FUNC_SET_NOT_USED */
-		zfs_kunmap_local(aiter->iter_mapaddr - offset);
+#ifndef HAVE_KMAP_LOCAL_PAGE
+		if (nonatomic)
+			paddr = zfs_kunmap(page);
+		else
+#endif
+			zfs_kunmap_local(aiter->iter_mapaddr - offset);
 	}
 
 	ASSERT3P(aiter->iter_mapaddr, !=, NULL);
@@ -953,6 +970,12 @@ abd_iter_unmap(struct abd_iter *aiter)
 
 	aiter->iter_mapaddr = NULL;
 	aiter->iter_mapsize = 0;
+}
+
+void
+abd_iter_unmap(struct abd_iter *aiter)
+{
+	abd_iter_unmap_impl(aiter, B_FALSE);
 }
 
 void
