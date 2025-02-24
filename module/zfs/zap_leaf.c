@@ -89,7 +89,7 @@ zap_leaf_byteswap(zap_leaf_phys_t *buf, size_t size)
 	zap_leaf_t l;
 	dmu_buf_t l_dbuf;
 
-	l_dbuf.db_data = buf;
+	l_dbuf.db_abd = abd_get_from_buf(buf, size);
 	l.l_bs = highbit64(size) - 1;
 	l.l_dbuf = &l_dbuf;
 
@@ -136,6 +136,7 @@ zap_leaf_byteswap(zap_leaf_phys_t *buf, size_t size)
 			    lc->l_free.lf_type);
 		}
 	}
+	abd_free(l_dbuf.db_abd);
 }
 
 void
