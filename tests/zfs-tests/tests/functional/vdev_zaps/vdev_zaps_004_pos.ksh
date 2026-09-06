@@ -53,6 +53,14 @@ assert_zap_common $TESTPOOL $DISK "top" $orig_top
 read -r _ disk2 _ <<<"$DISKS"
 log_must zpool attach $TESTPOOL $DISK $disk2
 log_must zpool wait -t resilver $TESTPOOL
+#
+# "zpool wait" returns as soon as the in-core state says the resilver is
+# over, which dsl_scan_done() sets in syncing context, ahead of the label
+# rewrite that same txg carries.  zdb reads those labels, and one caught
+# mid-rewrite fails the pool open with "Device not configured".  Sync the
+# pool so that the config zdb reads is the one on disk.
+#
+log_must sync_pool $TESTPOOL
 log_must eval "zdb -PC $TESTPOOL > $conf"
 
 # Ensure top-level ZAP was transferred successfully.
@@ -82,6 +90,7 @@ dsk2_leaf=$(get_leaf_vd_zap $disk2 $conf)
 #
 
 log_must zpool detach $TESTPOOL $DISK
+log_must sync_pool $TESTPOOL
 log_must eval "zdb -PC $TESTPOOL > $conf"
 
 final_top=$(get_top_vd_zap $disk2 $conf)
