@@ -20,12 +20,18 @@
 #include <string.h>
 #include <inttypes.h>
 #include <sys/types.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <time.h>
 #include <stdint.h>
 
-static unsigned char bigbuffer[BIGBUFFERSIZE];
+static union {
+	unsigned char	bytes[BIGBUFFERSIZE];
+	uint64_t	words[BIGBUFFERSIZE / sizeof (uint64_t)];
+} bigbuffer;
+
+static uint64_t rndstate;
 
 /*
  * Writes (or appends) a given value to a file repeatedly.
@@ -35,13 +41,56 @@ static unsigned char bigbuffer[BIGBUFFERSIZE];
 static void usage(char *);
 
 /*
- * pseudo-randomize the buffer
+ * xorshift64: a fast pseudo-random generator.  rand() is far too slow to
+ * call per byte (~50MB/s, slower than reading /dev/urandom), while this
+ * fills the buffer at several GB/s.
  */
-static void randomize_buffer(int block_size) {
+static uint64_t
+rnd64(void)
+{
+	rndstate ^= rndstate << 13;
+	rndstate ^= rndstate >> 7;
+	rndstate ^= rndstate << 17;
+	return (rndstate);
+}
+
+static void
+seed_buffer(void)
+{
+	struct timeval tv;
+
+	/*
+	 * time(NULL) alone only has one-second resolution: two file_write
+	 * processes started within the same second would be seeded
+	 * identically and produce byte-for-byte identical "random" output,
+	 * which some tests rely on being distinct.  Mix in microseconds and
+	 * the pid instead.  A zero state would make xorshift64 degenerate,
+	 * so make sure it never is.
+	 */
+	(void) gettimeofday(&tv, NULL);
+	rndstate = ((uint64_t)tv.tv_sec << 32) ^ ((uint64_t)tv.tv_usec << 16) ^
+	    (uint64_t)getpid();
+	if (rndstate == 0)
+		rndstate = UINT64_C(88172645463325252);
+}
+
+/*
+ * Refill the whole buffer with fresh pseudo-random data.  This is done for
+ * every block written so that no two blocks repeat: tests that depend on
+ * blocks being unique (dedup, block cloning, nopwrite) need that guarantee.
+ */
+static void
+randomize_buffer(int block_size)
+{
+	int nwords = block_size / sizeof (uint64_t);
 	int i;
-	char rnd = rand() & 0xff;
-	for (i = 0; i < block_size; i++)
-		bigbuffer[i] ^= rnd;
+
+	for (i = 0; i < nwords; i++)
+		bigbuffer.words[i] = rnd64();
+
+	/* Any bytes left over when block_size is not a multiple of 8. */
+	for (i = nwords * sizeof (uint64_t); i < block_size; i++)
+		bigbuffer.bytes[i] = rnd64() & 0xff;
 }
 
 int
@@ -141,19 +190,18 @@ main(int argc, char **argv)
 	nxtfillchar = fillchar;
 	k = 0;
 
-	if (fillchar == 'R')
-		srand(time(NULL));
+	if (fillchar == 'R') {
+		seed_buffer();
+	} else {
+		for (i = 0; i < block_size; i++) {
+			bigbuffer.bytes[i] = nxtfillchar;
 
-	for (i = 0; i < block_size; i++) {
-		bigbuffer[i] = nxtfillchar;
-
-		if (fillchar == 0) {
-			if ((k % DATA_RANGE) == 0) {
-				k = 0;
+			if (fillchar == 0) {
+				if ((k % DATA_RANGE) == 0) {
+					k = 0;
+				}
+				nxtfillchar = k++;
 			}
-			nxtfillchar = k++;
-		} else if (fillchar == 'R') {
-			nxtfillchar = rand() & 0xff;
 		}
 	}
 
@@ -215,7 +263,7 @@ main(int argc, char **argv)
 		if (fillchar == 'R')
 			randomize_buffer(block_size);
 
-		if ((n = write(bigfd, &bigbuffer, block_size)) == -1) {
+		if ((n = write(bigfd, bigbuffer.bytes, block_size)) == -1) {
 			(void) printf("write failed (%ld), good_writes = %"
 			    PRId64 ", " "error: %s[%d]\n",
 			    (long)n, good_writes,
