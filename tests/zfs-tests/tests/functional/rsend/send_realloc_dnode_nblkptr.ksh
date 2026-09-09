@@ -61,7 +61,7 @@ log_onexit cleanup
 # Underestimated nblkptr must not free unchanged blocks on incr receive.
 #
 log_must zfs create -o version=4 -o dnodesize=1k -o recordsize=128k $POOL/fs
-log_must dd if=/dev/urandom of=/$POOL/fs/file bs=128k count=8
+log_must file_write -o create -f /$POOL/fs/file -b 131072 -c 8 -d R
 log_must zfs snapshot $POOL/fs@a
 log_must eval "zfs send $POOL/fs@a > $sendfile"
 log_must eval "zfs recv $POOL/newfs < $sendfile"

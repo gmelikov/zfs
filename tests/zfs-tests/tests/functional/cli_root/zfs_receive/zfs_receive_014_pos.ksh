@@ -72,7 +72,7 @@ log_must eval "check_prop_source $dest '$userprop' '$userval' received"
 #    stream.
 log_must eval "zfs set compression='gzip-2' $orig"
 log_must eval "zfs inherit '$userprop' $orig"
-log_must eval "dd if=/dev/urandom of=$mntpnt/file bs=1024k count=10"
+log_must eval "file_write -o create -f $mntpnt/file -b 1048576 -c 10 -d R"
 log_must eval "zfs snapshot $orig@snap2"
 log_must eval "zfs send -p -i $orig@snap1 $orig@snap2 > $streamfile_incr"
 log_must eval "dd if=$streamfile_incr of=$streamfile_trun bs=1024k count=9"

@@ -85,7 +85,7 @@ for mode in "never" "auto" "always"; do
 	log_note "Checking 'cp --reflink=$mode'"
 
 	# Create a new file and immediately copy it.
-	log_must dd if=/dev/urandom of=$SRC_FILE bs=$RECORDSIZE count=$SRC_SIZE
+	log_must file_write -o create -f $SRC_FILE -b $RECORDSIZE -c $SRC_SIZE -d R
 
 	if [[ "$mode" == "always" ]]; then
 		log_mustnot cp --reflink=$mode $SRC_FILE $DST_FILE
@@ -130,7 +130,7 @@ for mode in "never" "auto" "always"; do
 	log_note "Checking 'cp --reflink=$mode'"
 
 	# Create a new file and immediately copy it.
-	log_must dd if=/dev/urandom of=$SRC_FILE bs=$RECORDSIZE count=$SRC_SIZE
+	log_must file_write -o create -f $SRC_FILE -b $RECORDSIZE -c $SRC_SIZE -d R
 	log_must cp --reflink=$mode $SRC_FILE $DST_FILE
 	verify_copy $SRC_FILE $DST_FILE
 	log_must rm -f $DST_FILE

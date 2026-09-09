@@ -114,7 +114,7 @@ log_must dd if=/dev/urandom of=$MNTPNT/throughput-8k bs=8k count=1
 log_must dd if=/dev/urandom of=$MNTPNT/throughput-128k bs=128k count=1
 
 # TX_WRITE (holes)
-log_must dd if=/dev/urandom of=$MNTPNT/holes bs=128k count=8
+log_must file_write -o create -f $MNTPNT/holes -b 131072 -c 8 -d R
 log_must dd if=/dev/zero of=$MNTPNT/holes bs=128k count=2 seek=2 conv=notrunc
 
 if is_linux; then
@@ -122,7 +122,7 @@ if is_linux; then
 	if fallocate --punch-hole 2>&1 | grep -q "unrecognized option"; then
 		log_note "fallocate(1) does not support --punch-hole"
 	else
-		log_must dd if=/dev/urandom of=$MNTPNT/discard bs=128k count=16
+		log_must file_write -o create -f $MNTPNT/discard -b 131072 -c 16 -d R
 		log_must fallocate --punch-hole -l 128K -o 512K $MNTPNT/discard
 		log_must fallocate --punch-hole -l 512K -o 1M $MNTPNT/discard
 	fi

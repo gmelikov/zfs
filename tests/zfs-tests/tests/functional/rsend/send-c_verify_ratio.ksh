@@ -48,7 +48,7 @@ for prop in "${compress_prop_vals[@]}"; do
 			    ${megs}m
 		else
 			typeset file="$(get_prop mountpoint $sendfs)/ddfile"
-			log_must dd if=/dev/urandom of=$file bs=1024k count=$megs
+			log_must file_write -o create -f $file -b 1048576 -c $megs -d R
 		fi
 
 		log_must zfs snapshot $sendfs@snap

@@ -132,7 +132,7 @@ log_must diff /$POOL/fs/file /$POOL/recv/file
 # 128K chunks across blocks.  Verify the batched split records are received
 # and reproduce the file exactly.
 log_must zfs create -o recordsize=1m $POOL/fsmulti
-log_must dd if=/dev/urandom of=/$POOL/fsmulti/file bs=1024k count=3
+log_must file_write -o create -f /$POOL/fsmulti/file -b 1048576 -c 3 -d R
 log_must zfs snapshot $POOL/fsmulti@snap1
 log_must eval "zfs send $POOL/fsmulti@snap1 >$BACKDIR/stream.multi"
 typeset nsplit=$(write_sizes "$BACKDIR/stream.multi" | grep -c "^$SPLIT$")

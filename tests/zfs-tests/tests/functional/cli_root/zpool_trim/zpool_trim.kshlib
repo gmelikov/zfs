@@ -37,7 +37,7 @@ function sync_and_rewrite_some_data_a_few_times
 
 	typeset file="/$pool/tmpfile"
 	for i in {0..$a_few_times}; do
-		dd if=/dev/urandom of=${file} bs=128k count=10
+		file_write -o create -f ${file} -b 131072 -c 10 -d R
 		sync_pool "$pool"
 	done
 

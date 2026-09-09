@@ -45,7 +45,7 @@ typeset pid
 
 log_must zpool create -f $TESTPOOL $DISK1 $DISK2
 
-log_must dd if=/dev/urandom of="/$TESTPOOL/testfile" bs=1k count=16k
+log_must file_write -o create -f "/$TESTPOOL/testfile" -b 1024 -c 16384 -d R
 
 # Start removal, but don't allow it to make any progress
 log_must set_tunable32 REMOVAL_SUSPEND_PROGRESS 1

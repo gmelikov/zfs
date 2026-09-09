@@ -43,7 +43,7 @@ for type in "mirror" "raidz" "raidz2"; do
 			log $LDEV
 
                 # Create a file to be corrupted
-                dd if=/dev/urandom of=/$TESTPOOL/filler bs=1024k count=50
+                file_write -o create -f /$TESTPOOL/filler -b 1048576 -c 50 -d R
 
                 #
                 # Ensure the file has been synced out before attempting to

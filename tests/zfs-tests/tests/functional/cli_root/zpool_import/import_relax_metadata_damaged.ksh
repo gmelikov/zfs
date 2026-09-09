@@ -69,8 +69,8 @@ typeset -i blocks=8
 
 log_must zpool create $TESTPOOL1 $VDEV0
 
-log_must dd if=/dev/urandom of=$intact bs=128k count=$blocks
-log_must dd if=/dev/urandom of=$damaged bs=128k count=$blocks
+log_must file_write -o create -f $intact -b 131072 -c $blocks -d R
+log_must file_write -o create -f $damaged -b 131072 -c $blocks -d R
 log_must sync_pool $TESTPOOL1
 typeset digest=$(xxh128digest $intact)
 

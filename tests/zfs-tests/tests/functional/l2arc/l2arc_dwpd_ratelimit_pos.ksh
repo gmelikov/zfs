@@ -92,11 +92,14 @@ for dwpd in 0 10000 5000 1800; do
 
 	# Populate L2ARC in chunks to complete first pass
 	# (DWPD only limits after first pass)
-	log_must dd if=/dev/urandom of=/$TESTPOOL/fill1 bs=1M count=$((fill_mb/3))
+	log_must file_write -o create -f /$TESTPOOL/fill1 \
+	   -b 1048576 -c $((fill_mb/3)) -d R
 	log_must sleep 5
-	log_must dd if=/dev/urandom of=/$TESTPOOL/fill2 bs=1M count=$((fill_mb/3))
+	log_must file_write -o create -f /$TESTPOOL/fill2 \
+	   -b 1048576 -c $((fill_mb/3)) -d R
 	log_must sleep 5
-	log_must dd if=/dev/urandom of=/$TESTPOOL/fill3 bs=1M count=$((fill_mb/3))
+	log_must file_write -o create -f /$TESTPOOL/fill3 \
+	   -b 1048576 -c $((fill_mb/3)) -d R
 	log_must sleep 5
 
 	# Delete files to free ARC and invalidate L2ARC entries

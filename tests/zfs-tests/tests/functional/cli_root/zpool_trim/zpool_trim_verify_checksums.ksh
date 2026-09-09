@@ -50,14 +50,14 @@ log_must mkdir "$TESTDIR"
 log_must truncate -s $LARGESIZE "$LARGEFILE"
 log_must zpool create $TESTPOOL "$LARGEFILE"
 
-log_must dd if=/dev/urandom of=/$TESTPOOL/file1 bs=1048576 count=64
+log_must file_write -o create -f /$TESTPOOL/file1 -b 1048576 -c 64 -d R
 sync_all_pools
 log_must zpool trim $TESTPOOL
 
 [[ -z "$(trim_progress $TESTPOOL $DISK1)" ]] && \
     log_fail "Trimming did not start"
 
-log_must dd if=/dev/urandom of=/$TESTPOOL/file2 bs=1048576 count=64
+log_must file_write -o create -f /$TESTPOOL/file2 -b 1048576 -c 64 -d R
 sync_all_pools
 
 log_must zpool export $TESTPOOL

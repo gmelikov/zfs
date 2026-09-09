@@ -94,7 +94,7 @@ set_tunable64 CHECKSUM_EVENTS_PER_SECOND 20000
 
 # Initialize resources for the test
 log_must truncate -s $MINVDEVSIZE $VDEV1 $VDEV2 $VDEV3
-log_must dd if=/dev/urandom of=$SUPPLY bs=1M count=$DAMAGEBLKS
+log_must file_write -o create -f $SUPPLY -b 1048576 -c $DAMAGEBLKS -d R
 log_must mkdir -p $MOUNTDIR
 log_must zpool create -f -m $MOUNTDIR -o failmode=continue $POOL raidz $VDEV1 $VDEV2 $VDEV3
 log_must zfs set compression=off recordsize=16k $POOL

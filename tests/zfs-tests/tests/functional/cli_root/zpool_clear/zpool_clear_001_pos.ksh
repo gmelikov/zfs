@@ -95,7 +95,7 @@ function do_testing #<clear type> <vdevs>
 	#
 	avail=$(get_prop available $FS)
 	fill_mb=$(((avail / 1024 / 1024) * 25 / 100))
-	log_must dd if=/dev/urandom of=$file bs=$BLOCKSZ count=$fill_mb
+	log_must file_write -o create -f $file -b $BLOCKSZ -c $fill_mb -d R
 
 	#
 	# Make errors to the testing pool by overwrite the vdev device with

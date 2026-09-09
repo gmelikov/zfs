@@ -51,7 +51,7 @@ log_must truncate -s200M $TEST_BASE_DIR/vdev.$$.{0..9}
 for raidtype in raidz raidz2 raidz3 draid1 draid2 draid3 ; do
 	log_must zpool create $TESTPOOL2 $raidtype $TEST_BASE_DIR/vdev.$$.{0..9}
 	log_must zpool set autosit=on $TESTPOOL2 "${raidtype}-0"
-	log_must dd if=/dev/urandom of=/$TESTPOOL2/bigfile bs=1M count=600
+	log_must file_write -o create -f /$TESTPOOL2/bigfile -b 1048576 -c 600 -d R
 	log_must zpool export $TESTPOOL2
 	log_must zpool import -d $TEST_BASE_DIR $TESTPOOL2
 

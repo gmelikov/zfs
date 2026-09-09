@@ -56,7 +56,7 @@ log_must zpool create -f $TESTPOOL1 ${VDEV_FILES[@]}
 log_must zfs create $TESTPOOL1/$TESTFS
 
 mntpnt=$(get_prop mountpoint $TESTPOOL1/$TESTFS)
-log_must dd if=/dev/urandom of=$mntpnt/file bs=1M count=64
+log_must file_write -o create -f $mntpnt/file -b 1048576 -c 64 -d R
 sync_pool $TESTPOOL1
 
 # Request a healing or sequential resilver

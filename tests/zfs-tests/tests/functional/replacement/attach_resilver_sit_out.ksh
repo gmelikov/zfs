@@ -145,7 +145,7 @@ for type in "raidz1" "raidz2" "raidz3" ; do
 	    $TESTPOOL1/$TESTFS1
 	log_must zfs set mountpoint=$TESTDIR1 $TESTPOOL1/$TESTFS1
 
-	log_must dd if=/dev/urandom of=/$TESTDIR1/bigfile bs=1M count=$count
+	log_must file_write -o create -f /$TESTDIR1/bigfile -b 1048576 -c $count -d R
 
 	# Make one disk 100ms slower to trigger a sit out
 	log_must zinject -d $slow_disk -D100:1 -T read $TESTPOOL1

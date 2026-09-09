@@ -58,7 +58,7 @@ for (( t=0; t<4; t++ )); do
 
 	log_must zpool create $TESTPOOL2 $raidtype $TEST_BASE_DIR/vdev.$$.{0..9}
 	log_must zpool set autosit=on $TESTPOOL2 "${raidtype}-0"
-	log_must dd if=/dev/urandom of=/$TESTPOOL2/bigfile bs=1M count=400
+	log_must file_write -o create -f /$TESTPOOL2/bigfile -b 1048576 -c 400 -d R
 	log_must zpool export $TESTPOOL2
 	log_must zpool import -d $TEST_BASE_DIR $TESTPOOL2
 

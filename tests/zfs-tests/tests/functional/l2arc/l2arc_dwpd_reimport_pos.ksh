@@ -85,11 +85,14 @@ log_must truncate -s ${cache_sz}M $VDEV_CACHE
 log_must zpool create -f $TESTPOOL $VDEV cache $VDEV_CACHE
 
 # Staged fills to allow L2ARC to drain between writes
-log_must dd if=/dev/urandom of=/$TESTPOOL/file1a bs=1M count=$((fill_mb/3))
+log_must file_write -o create -f /$TESTPOOL/file1a \
+   -b 1048576 -c $((fill_mb/3)) -d R
 log_must sleep 5
-log_must dd if=/dev/urandom of=/$TESTPOOL/file1b bs=1M count=$((fill_mb/3))
+log_must file_write -o create -f /$TESTPOOL/file1b \
+   -b 1048576 -c $((fill_mb/3)) -d R
 log_must sleep 5
-log_must dd if=/dev/urandom of=/$TESTPOOL/file1c bs=1M count=$((fill_mb/3))
+log_must file_write -o create -f /$TESTPOOL/file1c \
+   -b 1048576 -c $((fill_mb/3)) -d R
 log_must sleep 5
 
 # Verify L2ARC is populated before export
@@ -133,11 +136,14 @@ if [[ $l2_size_after -eq 0 ]]; then
 fi
 
 # Staged fills again after import
-log_must dd if=/dev/urandom of=/$TESTPOOL/file3a bs=1M count=$((fill_mb/3))
+log_must file_write -o create -f /$TESTPOOL/file3a \
+   -b 1048576 -c $((fill_mb/3)) -d R
 log_must sleep 5
-log_must dd if=/dev/urandom of=/$TESTPOOL/file3b bs=1M count=$((fill_mb/3))
+log_must file_write -o create -f /$TESTPOOL/file3b \
+   -b 1048576 -c $((fill_mb/3)) -d R
 log_must sleep 5
-log_must dd if=/dev/urandom of=/$TESTPOOL/file3c bs=1M count=$((fill_mb/3))
+log_must file_write -o create -f /$TESTPOOL/file3c \
+   -b 1048576 -c $((fill_mb/3)) -d R
 log_must sleep 5
 
 # Verify L2ARC is still populated after refill

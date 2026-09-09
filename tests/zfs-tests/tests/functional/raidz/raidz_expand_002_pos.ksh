@@ -80,8 +80,7 @@ log_must fill_fs /$pool/fs3 1 512 102400 1 R
 typeset pool_size=$(get_pool_prop size $pool)
 
 for disk in ${disks[$(($nparity+2))..$devs]}; do
-	log_must dd if=/dev/urandom of=/${pool}/FILE-$RANDOM bs=1M \
-	    count=64
+	log_must file_write -o create -f /${pool}/FILE-$RANDOM -b 1048576 -c 64 -d R
 
 	log_must zpool attach -w $pool ${raid}-0 $disk
 

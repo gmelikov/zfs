@@ -60,7 +60,7 @@ typeset -i count blks volsize=$(get_prop volsize $vol)
 ((count = blks / 2048))
 
 log_note "Fill 80% of swap"
-log_must dd if=/dev/urandom of=$TEMPFILE bs=1048576 count=$count
+log_must file_write -o create -f $TEMPFILE -b 1048576 -c $count -d R
 log_must rm -f $TEMPFILE
 log_must swap_cleanup $swapdev
 

@@ -72,7 +72,7 @@ function do_test {
 	block_device_wait $zvolpath
 
 	# Create a data file
-	log_must dd if=/dev/urandom of="$datafile1" bs=1M count=5
+	log_must file_write -o create -f "$datafile1" -b 1048576 -c 5 -d R
 	
 	# Write to zvol
 	log_must dd if=$datafile1 of=$zvolpath conv=fsync

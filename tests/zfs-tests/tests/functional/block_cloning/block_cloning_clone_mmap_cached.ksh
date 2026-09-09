@@ -52,8 +52,8 @@ log_must zfs create $TESTPOOL/$TESTFS
 
 for opts in "--" "-i" "-o" "-io"
 do
-	log_must dd if=/dev/urandom of=/$TESTPOOL/$TESTFS/src bs=1M count=1
-	log_must dd if=/dev/urandom of=/$TESTPOOL/$TESTFS/dst bs=1M count=1
+	log_must file_write -o create -f /$TESTPOOL/$TESTFS/src -b 131072 -c 8 -d R
+	log_must file_write -o create -f /$TESTPOOL/$TESTFS/dst -b 131072 -c 8 -d R
 
 	# Clear cache.
 	log_must zpool export $TESTPOOL

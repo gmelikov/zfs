@@ -34,8 +34,8 @@ function cleanup
 log_onexit cleanup
 
 # Write a little more than half the pool.
-log_must dd if=/dev/urandom of=/$TESTDIR/$TESTFILE0 bs=$((2**20)) \
-    count=$((MINVDEVSIZE / (1024 * 1024)))
+log_must file_write -o create -f /$TESTDIR/$TESTFILE0 -b $((2**20)) \
+    -c $((MINVDEVSIZE / (1024 * 1024))) -d R
 log_mustnot zpool remove $TESTPOOL $DISKDIR/dsk1
 
 log_pass "Removal will not succeed if insufficient space."

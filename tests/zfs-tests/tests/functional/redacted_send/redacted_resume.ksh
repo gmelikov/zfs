@@ -57,7 +57,7 @@ log_must eval "get_diff $send_mnt/f2 $recv_mnt/f2 >$tmpdir/get_diff.out"
 typeset range=$(<$tmpdir/get_diff.out)
 [[ "$RANGE9" = "$range" ]] || log_fail "Unexpected range: $range"
 
-log_must dd if=/dev/urandom of=$send_mnt/f3 bs=1024k count=3
+log_must file_write -o create -f $send_mnt/f3 -b 1048576 -c 3 -d R
 log_must zfs snapshot $sendfs@snap2
 log_must zfs clone $sendfs@snap2 $clone1
 typeset clone1_mnt="$(get_prop mountpoint $clone1)"

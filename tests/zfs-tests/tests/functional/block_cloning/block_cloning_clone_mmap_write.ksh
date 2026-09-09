@@ -51,7 +51,7 @@ log_must truncate -s 1G $VDEV
 log_must zpool create -o feature@block_cloning=enabled $TESTPOOL $VDEV
 log_must zfs create $TESTPOOL/$TESTFS
 
-log_must dd if=/dev/urandom of=/$TESTPOOL/$TESTFS/file bs=1M count=512
+log_must file_write -o create -f /$TESTPOOL/$TESTFS/file -b 1048576 -c 512 -d R
 log_must clone_mmap_write /$TESTPOOL/$TESTFS/file /$TESTPOOL/$TESTFS/clone
 
 sync_pool $TESTPOOL

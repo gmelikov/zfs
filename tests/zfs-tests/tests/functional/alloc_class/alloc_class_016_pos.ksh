@@ -33,7 +33,8 @@ log_must zpool create $TESTPOOL $ZPOOL_DISKS special $CLASS_DISK0
 # Provision a filesystem with special_small_blocks and copy 10M to it
 log_must zfs create -o compression=off -o special_small_blocks=32K \
 	-o recordsize=32K $TESTPOOL/$TESTFS
-log_must dd if=/dev/urandom of=/$TESTPOOL/$TESTFS/testfile bs=1M count=10
+log_must file_write -o create -f /$TESTPOOL/$TESTFS/testfile \
+   -b 1048576 -c 10 -d R
 
 # Provision a volume with special_small_blocks and copy 10M to it
 log_must zfs create -V 100M -b 32K -o special_small_blocks=32K \

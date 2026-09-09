@@ -80,7 +80,7 @@ function multiple_slow_vdevs_test
 	log_must zfs set primarycache=none $TESTPOOL
 	log_must zfs set recordsize=4K $TESTPOOL
 
-	log_must dd if=/dev/urandom of=$FILEPATH bs=1M count=4
+	log_must file_write -o create -f $FILEPATH -b 1048576 -c 4 -d R
 	zpool sync
 
 	#

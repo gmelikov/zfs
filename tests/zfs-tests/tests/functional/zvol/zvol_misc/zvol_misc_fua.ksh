@@ -80,7 +80,7 @@ function do_test {
 	fi
 
 	# Create a data file
-	log_must dd if=/dev/urandom of="$datafile1" bs=1M count=5
+	log_must file_write -o create -f "$datafile1" -b 1048576 -c 5 -d R
 
 	# Write the data to our zvol using FUA
 	log_must dd if=$datafile1 of=$zvolpath oflag=dsync,direct bs=1M count=5

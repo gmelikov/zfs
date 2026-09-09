@@ -37,7 +37,7 @@ log_onexit cleanup
 
 log_must zfs create -o compression=on -o recordsize=1m $TESTPOOL/fs
 
-log_must dd if=/dev/urandom of=/$TESTPOOL/fs/file bs=1024 count=1500
+log_must file_write -o create -f /$TESTPOOL/fs/file -b 1024 -c 1500 -d R
 
 log_must zfs snapshot $TESTPOOL/fs@snap
 

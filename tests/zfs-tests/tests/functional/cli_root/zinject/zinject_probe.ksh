@@ -44,7 +44,7 @@ log_must set_tunable32 TXG_TIMEOUT 600
 log_must zpool sync -f
 
 # write stuff. this should go into memory, not written yet
-log_must dd if=/dev/urandom of=/$TESTPOOL/file bs=1M count=1
+log_must file_write -o create -f /$TESTPOOL/file -b 131072 -c 8 -d R
 
 # inject faults
 log_must zinject -d $DISK1 -e io -T probe $TESTPOOL

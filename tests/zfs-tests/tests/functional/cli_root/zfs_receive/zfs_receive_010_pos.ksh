@@ -121,7 +121,7 @@ create_pair 17 $mntpnt $mntpnt2 "missing" "missing"
 
 # Receive a file with a different record size onto a file (and vice versa).
 log_must zfs set recordsize=128k $fs
-dd if=/dev/urandom of=$mntpnt/f18 bs=128k count=64
+file_write -o create -f $mntpnt/f18 -b 131072 -c 64 -d R
 touch $mntpnt2/f18
 
 # Remove objects that are intended to be missing.

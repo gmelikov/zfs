@@ -60,11 +60,11 @@ log_must eval "echo $passphrase2 > /pool_lb/pwd2"
 
 log_must zfs create -o encryption=on -o keyformat=passphrase \
 	-o keylocation=file:///pool_lb/pwd pool_lb/encryptme
-log_must dd if=/dev/urandom of=$file bs=1024 count=1024
+log_must file_write -o create -f $file -b 1024 -c 1024 -d R
 log_must zfs snapshot pool_lb/encryptme@snap1
-log_must dd if=/dev/urandom of=$file1 bs=1024 count=1024
+log_must file_write -o create -f $file1 -b 1024 -c 1024 -d R
 log_must zfs snapshot pool_lb/encryptme@snap2
-log_must dd if=/dev/urandom of=$file2 bs=1024 count=1024
+log_must file_write -o create -f $file2 -b 1024 -c 1024 -d R
 log_must zfs snapshot pool_lb/encryptme@snap3
 log_must eval "zfs send -Lc pool_lb/encryptme@snap1 | zfs recv \
 	-o encryption=on -o keyformat=passphrase -o keylocation=file:///pool_lb/pwd2 \

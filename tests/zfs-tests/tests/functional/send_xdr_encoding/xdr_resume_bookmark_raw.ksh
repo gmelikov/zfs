@@ -61,8 +61,8 @@ log_must eval "echo 'thisisapassphrase' > $keyfile"
 log_must zfs create -o encryption=on -o keyformat=passphrase \
     -o keylocation=file://$keyfile $sendfs
 
-log_must dd if=/dev/urandom of=/$sendfs/f1 bs=128k count=16 status=none
-log_must dd if=/dev/urandom of=/$sendfs/f2 bs=128k count=16 status=none
+log_must file_write -o create -f /$sendfs/f1 -b 131072 -c 16 -d R
+log_must file_write -o create -f /$sendfs/f2 -b 131072 -c 16 -d R
 log_must zfs snapshot $sendfs@s0
 
 log_must zfs clone $sendfs@s0 $clonefs

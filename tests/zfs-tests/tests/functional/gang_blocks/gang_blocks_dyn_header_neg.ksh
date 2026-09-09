@@ -40,7 +40,7 @@ set_tunable64 METASLAB_FORCE_GANGING 200000
 set_tunable32 METASLAB_FORCE_GANGING_PCT 100
 
 path="${mountpoint}/file"
-log_must dd if=/dev/urandom of=$path bs=1M count=1
+log_must file_write -o create -f $path -b 131072 -c 8 -d R
 log_must zpool sync $TESTPOOL
 first_block=$(get_first_block_dva $TESTPOOL/$TESTFS file)
 leaves=$(read_gang_header $TESTPOOL $first_block 200)
