@@ -63,7 +63,7 @@ log_must zpool create -f $TESTPOOL $DISKS
 
 log_must zfs create -o dedup=on $TESTPOOL/$TESTFS
 typeset mountpoint=$(get_prop mountpoint $TESTPOOL/$TESTFS)
-log_must dd if=/dev/urandom of=$mountpoint/f1 bs=1M count=16
+log_must file_write -o create -f $mountpoint/f1 -b 1048576 -c 16 -d R
 # We seems to need some amount of txg sync here to make it more consistently
 # reproducible
 for i in $(seq 50); do
@@ -90,7 +90,7 @@ fi
 # stay unprunable until one flush after their append txg.
 log_must set_tunable64 METASLAB_FORCE_GANGING 20000
 log_must set_tunable32 METASLAB_FORCE_GANGING_PCT 100
-log_must dd if=/dev/urandom of=$mountpoint/f2 bs=1M count=16
+log_must file_write -o create -f $mountpoint/f2 -b 1048576 -c 16 -d R
 for i in $(seq 5); do
 	sync_pool $TESTPOOL
 done

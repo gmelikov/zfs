@@ -50,8 +50,8 @@ log_assert "nopwrite works with sha256 and any compression algorithm"
 
 log_must zfs set compress=on $origin
 log_must zfs set checksum=sha256 $origin
-dd if=/dev/urandom of=$TESTDIR/file bs=1024k count=$MEGS conv=notrunc \
-    >/dev/null 2>&1 || log_fail "initial dd failed."
+log_must file_write -o create -f $TESTDIR/file \
+    -b 1048576 -c $MEGS -d R
 
 # Verify nop_write for all compression algorithms except "off"
 for i in "${compress_prop_vals[@]:1}"; do

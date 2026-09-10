@@ -44,8 +44,8 @@ function cleanup
 log_assert "nopwrite isn't enabled without the prerequisites"
 
 # Data written into origin fs without compression or sha256
-dd if=/dev/urandom of=$TESTDIR/file bs=1024k count=$MEGS conv=notrunc \
-    >/dev/null 2>&1 || log_fail "dd of $TESTDIR/file failed."
+log_must file_write -o create -f $TESTDIR/file \
+    -b 1048576 -c $MEGS -d R
 zfs snapshot $origin@a || log_fail "zfs snap failed"
 log_must zfs clone -o compress=on $origin@a $origin/clone
 log_must zfs set checksum=sha256 $origin/clone
@@ -57,8 +57,8 @@ log_must rm -f $TESTDIR/file
 
 # Data written to origin fs before checksum enabled
 log_must zfs set compress=on $origin
-dd if=/dev/urandom of=$TESTDIR/file bs=1024k count=$MEGS conv=notrunc \
-    >/dev/null 2>&1 || log_fail "dd into $TESTDIR/file failed."
+log_must file_write -o create -f $TESTDIR/file \
+    -b 1048576 -c $MEGS -d R
 log_must zfs set checksum=sha256 $origin
 zfs snapshot $origin@a || log_fail "zfs snap failed"
 log_must zfs clone $origin@a $origin/clone
@@ -69,8 +69,8 @@ zfs destroy -R $origin@a || log_fail "zfs destroy failed"
 log_must rm -f $TESTDIR/file
 
 # Clone with compression=off
-dd if=/dev/urandom of=$TESTDIR/file bs=1024k count=$MEGS conv=notrunc \
-    >/dev/null 2>&1 || log_fail "dd into $TESTDIR/file failed."
+log_must file_write -o create -f $TESTDIR/file \
+    -b 1048576 -c $MEGS -d R
 zfs snapshot $origin@a || log_fail "zfs snap failed"
 log_must zfs clone -o compress=off $origin@a $origin/clone
 dd if=/$TESTDIR/file of=/$TESTDIR/clone/file bs=1024k count=$MEGS \
@@ -80,8 +80,8 @@ zfs destroy -R $origin@a || log_fail "zfs destroy failed"
 log_must rm -f $TESTDIR/file
 
 # Clone with fletcher4, rather than sha256
-dd if=/dev/urandom of=$TESTDIR/file bs=1024k count=$MEGS conv=notrunc \
-    >/dev/null 2>&1 || log_fail "dd into $TESTDIR/file failed."
+log_must file_write -o create -f $TESTDIR/file \
+    -b 1048576 -c $MEGS -d R
 zfs snapshot $origin@a || log_fail "zfs snap failed"
 log_must zfs clone -o checksum=fletcher4 $origin@a $origin/clone
 dd if=/$TESTDIR/file of=/$TESTDIR/clone/file bs=1024k count=$MEGS \

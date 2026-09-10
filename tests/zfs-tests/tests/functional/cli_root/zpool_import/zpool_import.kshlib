@@ -71,7 +71,7 @@ function write_some_data
 	# Create 100 MB of data
 	typeset file="/$ds/fillerfile"
 	for i in {1..$files10mb}; do
-		dd if=/dev/urandom of=$file.$i bs=128k count=80 || return 1
+		file_write -o create -f $file.$i -b 131072 -c 80 -d R || return 1
 	done
 }
 
