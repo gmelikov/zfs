@@ -114,6 +114,9 @@ zfs_uio_init(zfs_uio_t *uio, struct uio *uio_s)
 }
 
 int zfs_uio_fault_move(void *p, size_t n, zfs_uio_rw_t dir, zfs_uio_t *uio);
+struct abd;
+int zfs_uio_fault_move_abd(struct abd *abd, size_t off, size_t n,
+    zfs_uio_rw_t dir, zfs_uio_t *uio);
 
 #endif /* !_STANDALONE */
 
