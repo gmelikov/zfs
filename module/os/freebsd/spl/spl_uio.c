@@ -110,6 +110,12 @@ zfs_uiocopy(void *p, size_t n, zfs_uio_rw_t rw, zfs_uio_t *uio, size_t *cbytes)
 	return (error);
 }
 
+static int
+zfs_uio_fault_move_abd_cb(void *buf, size_t size, void *private)
+{
+	return (vn_io_fault_uiomove(buf, size, (struct uio *)private));
+}
+
 int
 zfs_uiocopy_abd(abd_t *abd, size_t off, size_t n, zfs_uio_rw_t rw,
     zfs_uio_t *uio, size_t *cbytes)
@@ -129,7 +135,12 @@ zfs_uiocopy_abd(abd_t *abd, size_t off, size_t n, zfs_uio_rw_t rw,
 		uio_clone = cloneuio(GET_UIO_STRUCT(uio));
 	}
 
-	error = zfs_uiomove_abd(abd, off, n, rw, uio_clone);
+	/*
+	 * Like zfs_uiocopy(), copy through vn_io_fault_uiomove() on the
+	 * clone, so the caller's uio is left untouched.
+	 */
+	error = abd_iterate_func(abd, off, n, zfs_uio_fault_move_abd_cb,
+	    uio_clone);
 	*cbytes = zfs_uio_resid(uio) - uio_clone->uio_resid;
 	if (uio_clone != &small_uio_clone)
 		zfs_freeuio(uio_clone);
@@ -159,6 +170,15 @@ zfs_uio_fault_move(void *p, size_t n, zfs_uio_rw_t dir, zfs_uio_t *uio)
 {
 	ASSERT3U(zfs_uio_rw(uio), ==, dir);
 	return (vn_io_fault_uiomove(p, n, GET_UIO_STRUCT(uio)));
+}
+
+int
+zfs_uio_fault_move_abd(abd_t *abd, size_t off, size_t n, zfs_uio_rw_t dir,
+    zfs_uio_t *uio)
+{
+	ASSERT3U(zfs_uio_rw(uio), ==, dir);
+	return (abd_iterate_func(abd, off, n, zfs_uio_fault_move_abd_cb,
+	    GET_UIO_STRUCT(uio)));
 }
 
 /*
