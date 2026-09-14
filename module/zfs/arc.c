@@ -515,6 +515,8 @@ arc_stats_t arc_stats = {
 	{ "mutex_miss",			KSTAT_DATA_UINT64 },
 	{ "access_skip",		KSTAT_DATA_UINT64 },
 	{ "evict_skip",			KSTAT_DATA_UINT64 },
+	{ "evict_weak",			KSTAT_DATA_UINT64 },
+	{ "evict_weak_skip",		KSTAT_DATA_UINT64 },
 	{ "evict_not_enough",		KSTAT_DATA_UINT64 },
 	{ "evict_l2_cached",		KSTAT_DATA_UINT64 },
 	{ "evict_l2_eligible",		KSTAT_DATA_UINT64 },
@@ -761,6 +763,9 @@ taskq_t *arc_prune_taskq;
 #define	ARC_BUF_SHARED(buf)	((buf)->b_flags & ARC_BUF_FLAG_SHARED)
 #define	ARC_BUF_COMPRESSED(buf)	((buf)->b_flags & ARC_BUF_FLAG_COMPRESSED)
 #define	ARC_BUF_ENCRYPTED(buf)	((buf)->b_flags & ARC_BUF_FLAG_ENCRYPTED)
+#define	ARC_BUF_WEAK(buf)	((buf)->b_flags & ARC_BUF_FLAG_WEAK)
+
+static arc_weak_evict_func_t *arc_weak_evict_func;
 
 /*
  * Other sizes
@@ -2789,6 +2794,7 @@ arc_buf_alloc_impl(arc_buf_hdr_t *hdr, spa_t *spa, const zbookmark_phys_t *zb,
 	buf->b_abd = NULL;
 	buf->b_next = hdr->b_l1hdr.b_buf;
 	buf->b_flags = 0;
+	buf->b_weak_priv = NULL;
 
 	add_reference(hdr, tag);
 
@@ -3711,9 +3717,12 @@ arc_hdr_destroy(arc_buf_hdr_t *hdr)
 				if (HDR_HAS_L1HDR(hdr)) {
 					arc_cksum_free(hdr);
 
-					while (hdr->b_l1hdr.b_buf != NULL)
+					while (hdr->b_l1hdr.b_buf != NULL) {
+						ASSERT(!ARC_BUF_WEAK(
+						    hdr->b_l1hdr.b_buf));
 						arc_buf_destroy_impl(
 						    hdr->b_l1hdr.b_buf);
+					}
 
 					if (hdr->b_l1hdr.b_pabd != NULL)
 						arc_hdr_free_abd(hdr, B_FALSE);
@@ -3737,8 +3746,10 @@ arc_hdr_destroy(arc_buf_hdr_t *hdr)
 		if (HDR_HAS_L1HDR(hdr)) {
 			arc_cksum_free(hdr);
 
-			while (hdr->b_l1hdr.b_buf != NULL)
+			while (hdr->b_l1hdr.b_buf != NULL) {
+				ASSERT(!ARC_BUF_WEAK(hdr->b_l1hdr.b_buf));
 				arc_buf_destroy_impl(hdr->b_l1hdr.b_buf);
+			}
 
 			if (hdr->b_l1hdr.b_pabd != NULL)
 				arc_hdr_free_abd(hdr, B_FALSE);
@@ -3765,6 +3776,19 @@ void
 arc_buf_destroy(arc_buf_t *buf, const void *tag)
 {
 	arc_buf_hdr_t *hdr = buf->b_hdr;
+
+	if (ARC_BUF_WEAK(buf)) {
+		/* The owner holds no reference to drop. */
+		kmutex_t *hash_lock = HDR_LOCK(hdr);
+		mutex_enter(hash_lock);
+		ASSERT3P(hdr, ==, buf->b_hdr);
+		ASSERT(hdr->b_l1hdr.b_state == arc_mru ||
+		    hdr->b_l1hdr.b_state == arc_mfu);
+		buf->b_flags &= ~ARC_BUF_FLAG_WEAK;
+		arc_buf_destroy_impl(buf);
+		mutex_exit(hash_lock);
+		return;
+	}
 
 	if (hdr->b_l1hdr.b_state == arc_anon) {
 		ASSERT3P(hdr->b_l1hdr.b_buf, ==, buf);
@@ -3819,12 +3843,14 @@ arc_evict_hdr(arc_buf_hdr_t *hdr, uint64_t *real_evicted)
 	ASSERT(MUTEX_HELD(HDR_LOCK(hdr)));
 	ASSERT(HDR_HAS_L1HDR(hdr));
 	ASSERT(!HDR_IO_IN_PROGRESS(hdr));
-	ASSERT0P(hdr->b_l1hdr.b_buf);
+	IMPLY(hdr->b_l1hdr.b_buf != NULL, ARC_BUF_WEAK(hdr->b_l1hdr.b_buf) &&
+	    ARC_BUF_LAST(hdr->b_l1hdr.b_buf));
 	ASSERT0(zfs_refcount_count(&hdr->b_l1hdr.b_refcnt));
 
 	*real_evicted = 0;
 	state = hdr->b_l1hdr.b_state;
 	if (GHOST_STATE(state)) {
+		ASSERT0P(hdr->b_l1hdr.b_buf);
 
 		/*
 		 * l2arc_write_buffers() relies on a header's L1 portion
@@ -3878,6 +3904,25 @@ arc_evict_hdr(arc_buf_hdr_t *hdr, uint64_t *real_evicted)
 		ARCSTAT_BUMP(arcstat_evict_skip);
 		return (bytes_evicted);
 	}
+
+	/*
+	 * The only buffer may be held weakly by its owner.  The owner has to
+	 * let go of it first, which it may not be able to do without blocking
+	 * on a lock that is normally taken before ours; skip the header then,
+	 * as on a hash lock miss.
+	 */
+	arc_buf_t *weak_buf = hdr->b_l1hdr.b_buf;
+	if (weak_buf != NULL) {
+		ASSERT(state == arc_mru || state == arc_mfu);
+		if (!arc_weak_evict_func(weak_buf, weak_buf->b_weak_priv)) {
+			ARCSTAT_BUMP(arcstat_evict_weak_skip);
+			return (bytes_evicted);
+		}
+		weak_buf->b_flags &= ~ARC_BUF_FLAG_WEAK;
+		arc_buf_destroy_impl(weak_buf);
+		ARCSTAT_BUMP(arcstat_evict_weak);
+	}
+	ASSERT0P(hdr->b_l1hdr.b_buf);
 
 	if (HDR_HAS_L2HDR(hdr)) {
 		ARCSTAT_INCR(arcstat_evict_l2_cached, HDR_GET_LSIZE(hdr));
@@ -5544,6 +5589,80 @@ arc_buf_access(arc_buf_t *buf)
 	    !HDR_ISTYPE_METADATA(hdr), data, metadata, hits);
 }
 
+void
+arc_set_weak_evict_func(arc_weak_evict_func_t *func)
+{
+	arc_weak_evict_func = func;
+}
+
+boolean_t
+arc_buf_is_weak(arc_buf_t *buf)
+{
+	return (ARC_BUF_WEAK(buf) != 0);
+}
+
+/*
+ * Trade the owner's reference on buf's header for a weak hold, so that the
+ * header becomes evictable while the owner keeps pointing at the data.  On
+ * eviction the ARC calls arc_weak_evict_func(buf, priv) under the hash lock
+ * and frees buf once the owner has let go of it.  The owner must serialize
+ * this with arc_buf_strengthen() and arc_buf_destroy() on the same buf.
+ *
+ * Only a buffer sharing its data with the header qualifies, and only when it
+ * is the header's sole buffer and reference.  Such a buffer costs no memory
+ * beyond the header's own, and that memory is exactly what eviction frees.
+ */
+boolean_t
+arc_buf_weaken(arc_buf_t *buf, void *priv, const void *tag)
+{
+	arc_buf_hdr_t *hdr = buf->b_hdr;
+	boolean_t weak = B_FALSE;
+
+	ASSERT(!ARC_BUF_WEAK(buf));
+
+	if (arc_weak_evict_func == NULL || !ARC_BUF_SHARED(buf) ||
+	    hdr->b_l1hdr.b_state == arc_anon || HDR_EMPTY(hdr))
+		return (B_FALSE);
+
+	kmutex_t *hash_lock = HDR_LOCK(hdr);
+	mutex_enter(hash_lock);
+	if ((hdr->b_l1hdr.b_state == arc_mru ||
+	    hdr->b_l1hdr.b_state == arc_mfu) &&
+	    ARC_BUF_SHARED(buf) && !ARC_BUF_COMPRESSED(buf) &&
+	    !ARC_BUF_ENCRYPTED(buf) &&
+	    hdr->b_l1hdr.b_buf == buf && ARC_BUF_LAST(buf) &&
+	    !HDR_IO_IN_PROGRESS(hdr) &&
+	    zfs_refcount_count(&hdr->b_l1hdr.b_refcnt) == 1) {
+		buf->b_weak_priv = priv;
+		buf->b_flags |= ARC_BUF_FLAG_WEAK;
+		VERIFY0(remove_reference(hdr, tag));
+		weak = B_TRUE;
+	}
+	mutex_exit(hash_lock);
+
+	return (weak);
+}
+
+/*
+ * Take back the reference given up by arc_buf_weaken().
+ */
+void
+arc_buf_strengthen(arc_buf_t *buf, const void *tag)
+{
+	arc_buf_hdr_t *hdr = buf->b_hdr;
+	kmutex_t *hash_lock = HDR_LOCK(hdr);
+
+	mutex_enter(hash_lock);
+	ASSERT(ARC_BUF_WEAK(buf));
+	ASSERT3P(hdr, ==, buf->b_hdr);
+	ASSERT(hdr->b_l1hdr.b_state == arc_mru ||
+	    hdr->b_l1hdr.b_state == arc_mfu);
+	add_reference(hdr, tag);
+	buf->b_flags &= ~ARC_BUF_FLAG_WEAK;
+	buf->b_weak_priv = NULL;
+	mutex_exit(hash_lock);
+}
+
 /* a generic arc_read_done_func_t */
 void
 arc_getbuf_func(zio_t *zio, const zbookmark_phys_t *zb, const blkptr_t *bp,
@@ -6588,10 +6707,12 @@ arc_freed(spa_t *spa, const blkptr_t *bp)
 	 * the bp in the DDT and the override bp is freed. This allows
 	 * us to arrive here with a reference on a block that is being
 	 * freed. So if we have an I/O in progress, or a reference to
-	 * this hdr, then we don't destroy the hdr.
+	 * this hdr, then we don't destroy the hdr.  The same goes for a weakly
+	 * held buffer; normal eviction will take it from its owner.
 	 */
 	if (!HDR_HAS_L1HDR(hdr) ||
-	    zfs_refcount_is_zero(&hdr->b_l1hdr.b_refcnt)) {
+	    (zfs_refcount_is_zero(&hdr->b_l1hdr.b_refcnt) &&
+	    hdr->b_l1hdr.b_buf == NULL)) {
 		arc_change_state(arc_anon, hdr);
 		arc_hdr_destroy(hdr);
 		mutex_exit(hash_lock);
@@ -6756,10 +6877,19 @@ arc_release(arc_buf_t *buf, const void *tag)
 		if (!arc_hdr_has_uncompressed_buf(hdr))
 			arc_cksum_free(hdr);
 
-		if (single_buf_l2writing)
+		if (single_buf_l2writing) {
 			VERIFY3S(remove_reference(hdr, tag), ==, 0);
-		else
-			VERIFY3S(remove_reference(hdr, tag), >, 0);
+		} else {
+			/*
+			 * The remaining buffers normally keep their own
+			 * references, except for one held weakly (see
+			 * arc_buf_weaken()), which leaves the header
+			 * evictable once we are gone.
+			 */
+			int64_t refs = remove_reference(hdr, tag);
+			VERIFY(refs > 0 || (hdr->b_l1hdr.b_buf == lastbuf &&
+			    ARC_BUF_LAST(lastbuf) && ARC_BUF_WEAK(lastbuf)));
+		}
 
 		mutex_exit(hash_lock);
 
@@ -6788,6 +6918,20 @@ arc_release(arc_buf_t *buf, const void *tag)
 			if (HDR_HAS_L2HDR(hdr))
 				arc_hdr_l2hdr_destroy(hdr);
 			mutex_exit(&hdr->b_l2hdr.b_dev->l2ad_mtx);
+		}
+
+		/*
+		 * A shared buffer can get here while its header is being
+		 * written to the L2ARC, if the header was evictable under a
+		 * weak hold (see arc_buf_weaken()).  The write uses its own
+		 * copy of the data, and with the L2HDR gone the header is no
+		 * longer on the device list, so l2arc_write_done() will not
+		 * clear the flag for us.
+		 */
+		if (HDR_L2_WRITING(hdr)) {
+			ASSERT(ARC_BUF_SHARED(buf));
+			ASSERT(!HDR_HAS_L2HDR(hdr));
+			arc_hdr_clear_flags(hdr, ARC_FLAG_L2_WRITING);
 		}
 
 		hdr->b_l1hdr.b_mru_hits = 0;
@@ -7336,6 +7480,10 @@ arc_kstat_update(kstat_t *ksp, int rw)
 	    wmsum_value(&arc_sums.arcstat_access_skip);
 	as->arcstat_evict_skip.value.ui64 =
 	    wmsum_value(&arc_sums.arcstat_evict_skip);
+	as->arcstat_evict_weak.value.ui64 =
+	    wmsum_value(&arc_sums.arcstat_evict_weak);
+	as->arcstat_evict_weak_skip.value.ui64 =
+	    wmsum_value(&arc_sums.arcstat_evict_weak_skip);
 	as->arcstat_evict_not_enough.value.ui64 =
 	    wmsum_value(&arc_sums.arcstat_evict_not_enough);
 	as->arcstat_evict_l2_cached.value.ui64 =
@@ -7775,6 +7923,8 @@ arc_state_init(void)
 	wmsum_init(&arc_sums.arcstat_mutex_miss, 0);
 	wmsum_init(&arc_sums.arcstat_access_skip, 0);
 	wmsum_init(&arc_sums.arcstat_evict_skip, 0);
+	wmsum_init(&arc_sums.arcstat_evict_weak, 0);
+	wmsum_init(&arc_sums.arcstat_evict_weak_skip, 0);
 	wmsum_init(&arc_sums.arcstat_evict_not_enough, 0);
 	wmsum_init(&arc_sums.arcstat_evict_l2_cached, 0);
 	wmsum_init(&arc_sums.arcstat_evict_l2_eligible, 0);
@@ -7934,6 +8084,8 @@ arc_state_fini(void)
 	wmsum_fini(&arc_sums.arcstat_mutex_miss);
 	wmsum_fini(&arc_sums.arcstat_access_skip);
 	wmsum_fini(&arc_sums.arcstat_evict_skip);
+	wmsum_fini(&arc_sums.arcstat_evict_weak);
+	wmsum_fini(&arc_sums.arcstat_evict_weak_skip);
 	wmsum_fini(&arc_sums.arcstat_evict_not_enough);
 	wmsum_fini(&arc_sums.arcstat_evict_l2_cached);
 	wmsum_fini(&arc_sums.arcstat_evict_l2_eligible);

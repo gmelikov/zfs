@@ -228,6 +228,19 @@ static uint_t dbuf_metadata_cache_shift = 6;
 /* Set the dbuf hash mutex count as log2 shift (dynamic by default) */
 static uint_t dbuf_mutex_cache_shift = 0;
 
+/*
+ * Hold the ARC buffers of cached data dbufs weakly when they share their data
+ * with the ARC, so that the ARC can evict that data and the dbuf cache only
+ * pays for the dbufs themselves.
+ */
+static int dbuf_cache_weak = 1;
+
+static inline uint64_t
+dbuf_cache_weight(dmu_buf_impl_t *db)
+{
+	return (db->db_cache_weak ? sizeof (dmu_buf_impl_t) : db->db.db_size);
+}
+
 static unsigned long dbuf_cache_target_bytes(void);
 static unsigned long dbuf_metadata_cache_target_bytes(void);
 
@@ -783,7 +796,8 @@ dbuf_evict_one(void)
 	if (db != NULL) {
 		multilist_sublist_remove(mls, db);
 		multilist_sublist_unlock(mls);
-		uint64_t size = db->db.db_size;
+		uint64_t size = dbuf_cache_weight(db);
+		db->db_cache_weak = B_FALSE;
 		uint64_t usize = dmu_buf_user_size(&db->db);
 		(void) zfs_refcount_remove_many(
 		    &dbuf_caches[DB_DBUF_CACHE].size, size, db);
@@ -932,6 +946,36 @@ dbuf_kstat_update(kstat_t *ksp, int rw)
 	return (0);
 }
 
+/*
+ * Called by the ARC, with the hash lock of buf's header held, to take away a
+ * weakly held buffer from a dbuf in the dbuf cache.  db_mtx is normally taken
+ * before the hash lock, so only try it.  The dbuf stays in the cache as
+ * DB_UNCACHED until it is reused or aged out.
+ */
+static boolean_t
+dbuf_weak_evict(arc_buf_t *buf, void *priv)
+{
+	dmu_buf_impl_t *db = priv;
+
+	if (!mutex_tryenter(&db->db_mtx))
+		return (B_FALSE);
+
+	ASSERT3P(db->db_buf, ==, buf);
+	ASSERT(db->db_cache_weak);
+	ASSERT(multilist_link_active(&db->db_cache_link));
+	ASSERT(zfs_refcount_is_zero(&db->db_holds));
+	ASSERT0P(db->db_user);
+	ASSERT3U(db->db_state, ==, DB_CACHED);
+
+	db->db_buf = NULL;
+	db->db.db_abd = NULL;
+	db->db_state = DB_UNCACHED;
+	DTRACE_SET_STATE(db, "weakly held buffer evicted");
+	mutex_exit(&db->db_mtx);
+
+	return (B_TRUE);
+}
+
 void
 dbuf_init(void)
 {
@@ -1002,6 +1046,7 @@ dbuf_init(void)
 		    dbuf_cache_multilist_index_func);
 		zfs_refcount_create(&dbuf_caches[dcs].size);
 	}
+	arc_set_weak_evict_func(dbuf_weak_evict);
 
 	dbuf_evict_thread_exit = B_FALSE;
 	mutex_init(&dbuf_evict_lock, NULL, MUTEX_DEFAULT, NULL);
@@ -1049,6 +1094,7 @@ dbuf_fini(void)
 {
 	dbuf_hash_table_t *h = &dbuf_hash_table;
 
+	arc_set_weak_evict_func(NULL);
 	dbuf_stats_destroy();
 
 	for (int i = 0; i < (h->hash_mutex_mask + 1); i++)
@@ -3335,19 +3381,19 @@ dbuf_destroy(dmu_buf_impl_t *db)
 		multilist_remove(&dbuf_caches[db->db_caching_status].cache, db);
 
 		ASSERT0(dmu_buf_user_size(&db->db));
+		uint64_t size = dbuf_cache_weight(db);
 		(void) zfs_refcount_remove_many(
-		    &dbuf_caches[db->db_caching_status].size,
-		    db->db.db_size, db);
+		    &dbuf_caches[db->db_caching_status].size, size, db);
 
 		if (db->db_caching_status == DB_DBUF_METADATA_CACHE) {
 			DBUF_STAT_BUMPDOWN(metadata_cache_count);
 		} else {
 			DBUF_STAT_BUMPDOWN(cache_levels[db->db_level]);
 			DBUF_STAT_BUMPDOWN(cache_count);
-			DBUF_STAT_DECR(cache_levels_bytes[db->db_level],
-			    db->db.db_size);
+			DBUF_STAT_DECR(cache_levels_bytes[db->db_level], size);
 		}
 		db->db_caching_status = DB_NO_CACHE;
+		db->db_cache_weak = B_FALSE;
 	}
 
 	ASSERT(db->db_state == DB_UNCACHED || db->db_state == DB_NOFILL);
@@ -3551,6 +3597,7 @@ dbuf_create(dnode_t *dn, uint8_t level, uint64_t blkid,
 	db->db_freed_in_flight = FALSE;
 	db->db_pending_evict = TRUE;
 	db->db_partial_read = FALSE;
+	db->db_cache_weak = FALSE;
 
 	if (blkid == DMU_BONUS_BLKID) {
 		ASSERT3P(parent, ==, dn->dn_dbuf);
@@ -3850,12 +3897,17 @@ dbuf_prefetch_impl(dnode_t *dn, int64_t level, uint64_t blkid,
 	dmu_buf_impl_t *db = dbuf_find(dn->dn_objset, dn->dn_object,
 	    level, blkid, NULL);
 	if (db != NULL) {
-		mutex_exit(&db->db_mtx);
 		/*
 		 * This dbuf already exists.  It is either CACHED, or
-		 * (we assume) about to be read or filled.
+		 * (we assume) about to be read or filled, unless it sits
+		 * in the dbuf cache after the ARC took its weakly held
+		 * buffer away; then nobody is going to read it.
 		 */
-		goto no_issue;
+		boolean_t evicted = db->db_cache_weak &&
+		    db->db_state == DB_UNCACHED;
+		mutex_exit(&db->db_mtx);
+		if (!evicted)
+			goto no_issue;
 	}
 
 	/*
@@ -4053,8 +4105,12 @@ dbuf_hold_impl(dnode_t *dn, uint8_t level, uint64_t blkid,
 	}
 
 	if (db->db_buf != NULL) {
-		arc_buf_access(db->db_buf);
 		ASSERT(MUTEX_HELD(&db->db_mtx));
+		if (arc_buf_is_weak(db->db_buf)) {
+			ASSERT(db->db_cache_weak);
+			arc_buf_strengthen(db->db_buf, db);
+		}
+		arc_buf_access(db->db_buf);
 		ASSERT3P(db->db.db_abd, ==, db->db_buf->b_abd);
 	}
 
@@ -4082,7 +4138,8 @@ dbuf_hold_impl(dnode_t *dn, uint8_t level, uint64_t blkid,
 
 		multilist_remove(&dbuf_caches[db->db_caching_status].cache, db);
 
-		uint64_t size = db->db.db_size;
+		uint64_t size = dbuf_cache_weight(db);
+		db->db_cache_weak = B_FALSE;
 		uint64_t usize = dmu_buf_user_size(&db->db);
 		(void) zfs_refcount_remove_many(
 		    &dbuf_caches[db->db_caching_status].size, size, db);
@@ -4319,8 +4376,19 @@ dbuf_rele_and_unlock(dmu_buf_impl_t *db, const void *tag, boolean_t evicting)
 			    DB_DBUF_METADATA_CACHE : DB_DBUF_CACHE;
 			db->db_caching_status = dcs;
 
+			/*
+			 * A data buffer shared with the ARC costs nothing
+			 * beyond the ARC's own copy, so let the ARC evict it.
+			 */
+			ASSERT(!db->db_cache_weak);
+			if (dcs == DB_DBUF_CACHE && dbuf_cache_weak &&
+			    db->db_level == 0 && db->db_user == NULL &&
+			    db->db_state == DB_CACHED &&
+			    arc_buf_weaken(db->db_buf, db, db))
+				db->db_cache_weak = B_TRUE;
+
 			multilist_insert(&dbuf_caches[dcs].cache, db);
-			uint64_t db_size = db->db.db_size;
+			uint64_t db_size = dbuf_cache_weight(db);
 			uint64_t dbu_size = dmu_buf_user_size(&db->db);
 			(void) zfs_refcount_add_many(
 			    &dbuf_caches[dcs].size, db_size, db);
@@ -5596,3 +5664,6 @@ ZFS_MODULE_PARAM(zfs_dbuf, dbuf_, metadata_cache_shift, UINT, ZMOD_RW,
 
 ZFS_MODULE_PARAM(zfs_dbuf, dbuf_, mutex_cache_shift, UINT, ZMOD_RD,
 	"Set size of dbuf cache mutex array as log2 shift.");
+
+ZFS_MODULE_PARAM(zfs_dbuf, dbuf_, cache_weak, INT, ZMOD_RW,
+	"Let the ARC evict data shared with cached dbufs.");

@@ -185,7 +185,13 @@ typedef enum arc_buf_flags {
 	 * indicates whether this arc_buf_t is encrypted, regardless of
 	 * state on-disk
 	 */
-	ARC_BUF_FLAG_ENCRYPTED		= 1 << 2
+	ARC_BUF_FLAG_ENCRYPTED		= 1 << 2,
+	/*
+	 * The owner does not hold a reference on the header, so the header
+	 * is evictable; the ARC asks the owner to let go before evicting it.
+	 * See arc_buf_weaken().
+	 */
+	ARC_BUF_FLAG_WEAK		= 1 << 3
 } arc_buf_flags_t;
 
 struct arc_buf {
@@ -193,6 +199,7 @@ struct arc_buf {
 	arc_buf_t		*b_next;
 	abd_t			*b_abd;
 	arc_buf_flags_t		b_flags;
+	void			*b_weak_priv;	/* owner, while weak */
 };
 
 typedef enum arc_buf_contents {
@@ -293,6 +300,18 @@ void arc_buf_info(arc_buf_t *buf, arc_buf_info_t *abi, int state_index);
 uint64_t arc_buf_size(arc_buf_t *buf);
 uint64_t arc_buf_lsize(arc_buf_t *buf);
 void arc_buf_access(arc_buf_t *buf);
+
+/*
+ * Called with the header's hash lock held.  Must detach the buffer from its
+ * owner without blocking and return B_TRUE, or return B_FALSE to have the
+ * header skipped.  The ARC frees the buffer afterwards.
+ */
+typedef boolean_t arc_weak_evict_func_t(arc_buf_t *buf, void *priv);
+void arc_set_weak_evict_func(arc_weak_evict_func_t *func);
+boolean_t arc_buf_weaken(arc_buf_t *buf, void *priv, const void *tag);
+void arc_buf_strengthen(arc_buf_t *buf, const void *tag);
+boolean_t arc_buf_is_weak(arc_buf_t *buf);
+
 void arc_release(arc_buf_t *buf, const void *tag);
 int arc_released(arc_buf_t *buf);
 void arc_buf_sigsegv(int sig, siginfo_t *si, void *unused);

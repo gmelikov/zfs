@@ -611,6 +611,12 @@ typedef struct arc_stats {
 	 */
 	kstat_named_t arcstat_evict_skip;
 	/*
+	 * Number of evicted headers whose buffer was weakly held by its owner,
+	 * and number of headers skipped because the owner could not let go.
+	 */
+	kstat_named_t arcstat_evict_weak;
+	kstat_named_t arcstat_evict_weak_skip;
+	/*
 	 * Number of times arc_evict_state() was unable to evict enough
 	 * buffers to reach its target amount.
 	 */
@@ -982,6 +988,8 @@ typedef struct arc_sums {
 	wmsum_t arcstat_mutex_miss;
 	wmsum_t arcstat_access_skip;
 	wmsum_t arcstat_evict_skip;
+	wmsum_t arcstat_evict_weak;
+	wmsum_t arcstat_evict_weak_skip;
 	wmsum_t arcstat_evict_not_enough;
 	wmsum_t arcstat_evict_l2_cached;
 	wmsum_t arcstat_evict_l2_eligible;

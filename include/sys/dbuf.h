@@ -271,6 +271,14 @@ typedef struct dmu_buf_impl {
 	uint8_t db_partial_read;
 
 	/*
+	 * While in the dbuf cache, db_buf is held weakly (see arc_buf_weaken())
+	 * and the cache accounts only for the dbuf itself.  The ARC may take
+	 * db_buf away at any time, leaving the dbuf DB_UNCACHED.  Protected
+	 * by db_mtx.
+	 */
+	uint8_t db_cache_weak;
+
+	/*
 	 * Protects db_buf's contents if they contain an indirect block or data
 	 * block of the meta-dnode. We use this lock to protect the structure of
 	 * the block tree. This means that when modifying this dbuf's data, we
