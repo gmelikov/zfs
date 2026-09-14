@@ -897,7 +897,7 @@ zhack_collect_dd_clones_refs(objset_t *mos, zfs_range_tree_t *clones_refd_objs)
 
 		if (db->db_size >= offsetof(dsl_dir_phys_t, dd_clones) +
 		    sizeof (((dsl_dir_phys_t *)0)->dd_clones)) {
-			dsl_dir_phys_t *dd = db->db_data;
+			dsl_dir_phys_t *dd = abd_to_buf(db->db_abd);
 			zhack_mos_refd_once(clones_refd_objs, dd->dd_clones);
 		}
 		dmu_buf_rele(db, FTAG);
@@ -1094,7 +1094,7 @@ zhack_collect_mos_leak_report(spa_t *spa, zhack_leak_report_t *report,
 			report->zlr_unref_spacemaps++;
 			error = dmu_bonus_hold(mos, object, FTAG, &db);
 			if (error == 0) {
-				space_map_phys_t *smp = db->db_data;
+				space_map_phys_t *smp = abd_to_buf(db->db_abd);
 				smp_alloc = smp->smp_alloc;
 				smp_length = smp->smp_length;
 				dmu_buf_rele(db, FTAG);

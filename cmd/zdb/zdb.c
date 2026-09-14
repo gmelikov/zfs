@@ -1646,7 +1646,7 @@ dump_spacemap_refcount_mismatch_details(spa_t *spa,
 			continue;
 		}
 
-		space_map_phys_t *smp = db->db_data;
+		space_map_phys_t *smp = abd_to_buf(db->db_abd);
 		(void) printf("\t    object %llu smp_alloc=0x%llx "
 		    "smp_length=0x%llx\n", (u_longlong_t)object,
 		    (u_longlong_t)smp->smp_alloc,
@@ -8970,7 +8970,7 @@ dump_mos_leaked_object_details(objset_t *mos, uint64_t object,
 			return;
 		}
 
-		space_map_phys_t *smp = db->db_data;
+		space_map_phys_t *smp = abd_to_buf(db->db_abd);
 		(void) printf("\tleak detail: smp_alloc=0x%llx "
 		    "smp_length=0x%llx\n", (u_longlong_t)smp->smp_alloc,
 		    (u_longlong_t)smp->smp_length);
