@@ -49,6 +49,9 @@ log_must mkfile 32M $mntpt/file1
 
 log_must zinject -a -t data -e decrypt -f 20 $mntpt/file1
 log_must zfs umount $TESTPOOL/fs
+# The ARC may still hold the plaintext written above, which would be served
+# without decryption.  Flush it now that the dataset no longer holds it.
+log_must zinject -a
 log_must zfs mount $TESTPOOL/fs
 
 log_mustnot eval "cat $mntpt/file1 > /dev/null"
