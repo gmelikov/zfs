@@ -2221,6 +2221,13 @@ zfs_dedupe_range_copy_memcmp(znode_t *inzp, uint64_t inoff, znode_t *outzp,
 	return (error);
 }
 
+static int
+zfs_abd_cmp_cb(void *bufa, void *bufb, size_t size, void *priv)
+{
+	(void) priv;
+	return (memcmp(bufa, bufb, size));
+}
+
 /*
  * Compare [inoff, inoff + len) in inzp with [outoff, outoff + len) in outzp by
  * reading the committed on-disk data through the DMU (the same data
@@ -2336,13 +2343,14 @@ zfs_dedupe_range_memcmp(znode_t *inzp, uint64_t inoff, znode_t *outzp,
 
 			ASSERT3U(indbp[i]->db_offset, ==, inoff);
 			ASSERT3U(outdbp[i]->db_offset, ==, outoff);
-			ASSERT3P(indbp[i]->db_data, !=, NULL);
-			ASSERT3P(outdbp[i]->db_data, !=, NULL);
+			ASSERT3P(indbp[i]->db_abd, !=, NULL);
+			ASSERT3P(outdbp[i]->db_abd, !=, NULL);
 
 			tocmp = MIN(indbp[i]->db_size, left);
 
-			if (memcmp(indbp[i]->db_data, outdbp[i]->db_data,
-			    tocmp) != 0) {
+			if (abd_iterate_func2(indbp[i]->db_abd,
+			    outdbp[i]->db_abd, 0, 0, tocmp, zfs_abd_cmp_cb,
+			    NULL) != 0) {
 				diff = B_TRUE;
 				break;
 			}
