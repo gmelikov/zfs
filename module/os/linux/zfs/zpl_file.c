@@ -178,11 +178,9 @@ zpl_fsync(struct file *filp, loff_t start, loff_t end, int datasync)
 		}
 	}
 
-	crhold(cr);
 	cookie = spl_fstrans_mark();
 	error = -zfs_fsync(zp, datasync, cr);
 	spl_fstrans_unmark(cookie);
-	crfree(cr);
 	ASSERT3S(error, <=, 0);
 
 	return (error);
@@ -272,14 +270,12 @@ zpl_iter_read(struct kiocb *kiocb, struct iov_iter *to)
 	if (zfd != NULL && zfd->zfd_dio_read_declined)
 		uio.uio_extflg |= UIO_DIO_DENY;
 
-	crhold(cr);
 	cookie = spl_fstrans_mark();
 
 	ssize_t ret = -zfs_read(ITOZ(filp->f_mapping->host), &uio,
 	    filp->f_flags | zfs_io_flags(kiocb), cr);
 
 	spl_fstrans_unmark(cookie);
-	crfree(cr);
 
 	/*
 	 * A Direct I/O read verify failed benignly (recycled O_DIRECT buffer)
@@ -331,14 +327,12 @@ zpl_iter_write(struct kiocb *kiocb, struct iov_iter *from)
 	zfs_uio_iov_iter_init(&uio, from, kiocb->ki_pos, count);
 	uio.uio_extflg |= zfs_uio_flags(kiocb);
 
-	crhold(cr);
 	cookie = spl_fstrans_mark();
 
 	ret = -zfs_write(ITOZ(ip), &uio,
 	    filp->f_flags | zfs_io_flags(kiocb), cr);
 
 	spl_fstrans_unmark(cookie);
-	crfree(cr);
 
 	if (ret < 0)
 		return (ret);
