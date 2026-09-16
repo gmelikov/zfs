@@ -990,7 +990,7 @@ do_dump(dmu_send_cookie_t *dscp, struct send_range *range)
 		if (srdp->datablksz > SPA_OLD_MAXBLOCKSIZE &&
 		    !(dscp->dsc_featureflags &
 		    DMU_BACKUP_FEATURE_LARGE_BLOCKS)) {
-			void *tmp = dump_buf;
+			char *tmp = dump_buf;
 			while (srdp->datablksz > 0 && err == 0) {
 				int n = MIN(srdp->datablksz,
 				    SPA_OLD_MAXBLOCKSIZE);
