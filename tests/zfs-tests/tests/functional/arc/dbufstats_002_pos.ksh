@@ -66,6 +66,15 @@ dbuf=$(dbufstat -bxn -i "$DBUFS_FILE" -F "object=$objid" | wc -l)
 mru=$(dbufstat -bxn -i "$DBUFS_FILE" -F "object=$objid,list=1" | wc -l)
 mfu=$(dbufstat -bxn -i "$DBUFS_FILE" -F "object=$objid,list=3" | wc -l)
 log_note "dbuf count is $dbuf, mru count is $mru, mfu count is $mfu"
+# XXX DIAG, not for merge: in CI the dbufs stay on the mru list after the
+# second read.  Show the dbufs themselves and the ARC state behind them.
+log_note "dbufs of object $objid:"
+log_note "$(dbufstat -bxn -i "$DBUFS_FILE" -F "object=$objid")"
+log_note "dbuf_cache_weak: $(cat /sys/module/zfs/parameters/dbuf_cache_weak \
+    2>/dev/null)"
+log_note "arcstats:"
+log_note "$(grep -E '^(evict_weak|evict_weak_skip|mru_size|mfu_size|size|c) ' \
+    /proc/spl/kstat/zfs/arcstats 2>/dev/null)"
 verify_ne "0" "$mfu" "mfu count"
 
 log_pass "dbufs move from mru to mfu list passed"

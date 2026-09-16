@@ -54,8 +54,38 @@ log_must zfs umount $TESTPOOL/fs
 log_must zinject -a
 log_must zfs mount $TESTPOOL/fs
 
-log_mustnot eval "cat $mntpt/file1 > /dev/null"
+# XXX DIAG, not for merge: the read fails in CI without an authentication
+# ereport, which does not reproduce locally.  Record why the read failed and
+# what the pool actually reported.
+log_note "handlers before the read:"
+log_note "$(zinject)"
+log_note "dbuf_cache_weak: $(cat /sys/module/zfs/parameters/dbuf_cache_weak \
+    2>/dev/null)"
+
+typeset read_err read_rc
+read_err=$(eval "cat $mntpt/file1 2>&1 >/dev/null")
+read_rc=$?
+log_note "cat exited $read_rc, stderr: ${read_err:-<empty>}"
+
 # Events are not supported on FreeBSD
+if ! is_freebsd; then
+	log_note "ereports:"
+	log_note "$(zpool events $TESTPOOL | grep ereport)"
+	log_note "ereports, verbose:"
+	log_note "$(zpool events -v $TESTPOOL | sed -n '/ereport/,$p' | \
+	    head -n 200)"
+	log_note "pool status:"
+	log_note "$(zpool status -v $TESTPOOL)"
+	log_note "arcstats:"
+	log_note "$(grep -E \
+	    '^(evict_weak|evict_weak_skip|demand_data_hits|demand_data_misses)' \
+	    /proc/spl/kstat/zfs/arcstats 2>/dev/null)"
+fi
+
+if (( read_rc == 0 )); then
+	log_fail "reading $mntpt/file1 unexpectedly succeeded"
+fi
+
 if ! is_freebsd; then
 	log_must eval "zpool events $TESTPOOL | grep -q 'authentication'"
 fi
