@@ -5304,7 +5304,38 @@ zio_arc_repair_done(zio_t *zio)
 	pio->io_error = zio->io_error;
 }
 
-/* Try a verified L1 ARC copy only after all on-disk copies failed. */
+static boolean_t
+zio_arc_repair_write(zio_t *zio)
+{
+	blkptr_t *bp = zio->io_bp;
+	zio_t *repair;
+
+	if (zio_checksum_error_impl(zio->io_spa, bp, BP_GET_CHECKSUM(bp),
+	    zio->io_abd, zio->io_size, zio->io_offset, NULL) != 0)
+		return (B_FALSE);
+
+	/* The read owns the BP and ABD until its repair child completes. */
+	zio->io_error = 0;
+	zio->io_child_error[ZIO_CHILD_VDEV] = 0;
+	repair = zio_rewrite(zio, zio->io_spa, BP_GET_BIRTH(bp), bp,
+	    zio->io_abd, zio->io_size, zio_arc_repair_done, zio,
+	    ZIO_PRIORITY_SCRUB, ZIO_FLAG_RAW | ZIO_FLAG_CANFAIL |
+	    ZIO_FLAG_DONT_PROPAGATE | ZIO_FLAG_IO_REPAIR |
+	    ZIO_FLAG_SELF_HEAL | ZIO_FLAG_SCAN_THREAD, &zio->io_bookmark);
+	/* Preserve the verified checksum, including foreign byte order. */
+	repair->io_pipeline &= ~ZIO_STAGE_CHECKSUM_GENERATE;
+	zio_nowait(repair);
+	return (B_TRUE);
+}
+
+static void
+zio_arc_repair_l2_done(zio_t *zio)
+{
+	if (zio->io_error == 0)
+		(void) zio_arc_repair_write(zio->io_private);
+}
+
+/* Try a verified cache copy only after all on-disk copies failed. */
 static void
 zio_arc_repair(zio_t *zio)
 {
@@ -5312,7 +5343,7 @@ zio_arc_repair(zio_t *zio)
 	blkptr_t cbp;
 	arc_buf_t *buf = NULL;
 	arc_flags_t arc_flags;
-	zio_t *repair;
+	zio_t *read;
 
 	if (zio->io_error == 0 || zio->io_type != ZIO_TYPE_READ ||
 	    zio->io_child_type != ZIO_CHILD_LOGICAL || zio->io_vd != NULL ||
@@ -5332,36 +5363,27 @@ zio_arc_repair(zio_t *zio)
 			cbp.blk_dva[j] =
 			    bp->blk_dva[(i + j) % BP_GET_NDVAS(bp)];
 		arc_flags = ARC_FLAG_WAIT | ARC_FLAG_CACHED_ONLY;
-		if (arc_read(NULL, zio->io_spa, &cbp, arc_getbuf_func, &buf,
-		    ZIO_PRIORITY_SCRUB, ZIO_FLAG_RAW, &arc_flags,
-		    &zio->io_bookmark) == 0)
+		(void) arc_read(NULL, zio->io_spa, &cbp, arc_getbuf_func,
+		    &buf, ZIO_PRIORITY_SCRUB, ZIO_FLAG_RAW, &arc_flags,
+		    &zio->io_bookmark);
+		if (buf != NULL) {
+			boolean_t raw = arc_buf_size(buf) == zio->io_size &&
+			    arc_get_compression(buf) == BP_GET_COMPRESS(bp);
+
+			if (raw)
+				abd_copy_from_buf(zio->io_abd, buf->b_data,
+				    zio->io_size);
+			arc_buf_destroy(buf, &buf);
+			if (raw && zio_arc_repair_write(zio))
+				return;
+		}
+		read = arc_read_l2_raw(zio, zio->io_spa, &cbp, zio->io_abd,
+		    zio_arc_repair_l2_done, zio, ZIO_PRIORITY_SCRUB);
+		if (read != NULL) {
+			zio_nowait(read);
 			break;
+		}
 	}
-	if (buf == NULL)
-		return;
-
-	if (arc_buf_size(buf) != zio->io_size ||
-	    arc_get_compression(buf) != BP_GET_COMPRESS(bp)) {
-		arc_buf_destroy(buf, &buf);
-		return;
-	}
-	abd_copy_from_buf(zio->io_abd, buf->b_data, zio->io_size);
-	arc_buf_destroy(buf, &buf);
-	if (zio_checksum_error_impl(zio->io_spa, bp, BP_GET_CHECKSUM(bp),
-	    zio->io_abd, zio->io_size, zio->io_offset, NULL) != 0)
-		return;
-
-	/* The read owns the BP and ABD until its repair child completes. */
-	zio->io_error = 0;
-	zio->io_child_error[ZIO_CHILD_VDEV] = 0;
-	repair = zio_rewrite(zio, zio->io_spa, BP_GET_BIRTH(bp), bp,
-	    zio->io_abd, zio->io_size, zio_arc_repair_done, zio,
-	    ZIO_PRIORITY_SCRUB, ZIO_FLAG_RAW | ZIO_FLAG_CANFAIL |
-	    ZIO_FLAG_DONT_PROPAGATE | ZIO_FLAG_IO_REPAIR |
-	    ZIO_FLAG_SELF_HEAL | ZIO_FLAG_SCAN_THREAD, &zio->io_bookmark);
-	/* Preserve the verified checksum, including foreign byte order. */
-	repair->io_pipeline &= ~ZIO_STAGE_CHECKSUM_GENERATE;
-	zio_nowait(repair);
 }
 
 static zio_t *

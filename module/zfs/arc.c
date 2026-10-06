@@ -868,6 +868,12 @@ typedef struct l2arc_read_callback {
 	abd_t			*l2rcb_abd;		/* temporary buffer */
 } l2arc_read_callback_t;
 
+typedef struct l2arc_raw_read_callback {
+	abd_t			*l2rrc_abd;
+	zio_done_func_t		*l2rrc_done;
+	void			*l2rrc_private;
+} l2arc_raw_read_callback_t;
+
 typedef struct l2arc_data_free {
 	/* protected by l2arc_free_on_write_mtx */
 	abd_t		*l2df_abd;
@@ -6488,6 +6494,89 @@ done:
 		zio_nowait(zio);
 	}
 	goto out;
+}
+
+static void
+l2arc_raw_read_done(zio_t *zio)
+{
+	l2arc_raw_read_callback_t *cb = zio->io_private;
+	blkptr_t *bp = &zio->io_bp_copy;
+	uint64_t size = BP_GET_PSIZE(bp);
+
+	spa_config_exit(zio->io_spa, SCL_L2ARC, zio->io_vd);
+	if (zio->io_error != 0) {
+		ARCSTAT_BUMP(arcstat_l2_io_error);
+	} else {
+		zio->io_error = zio_checksum_error_impl(zio->io_spa, bp,
+		    BP_GET_CHECKSUM(bp), zio->io_abd, size, 0, NULL);
+		if (zio->io_error != 0)
+			ARCSTAT_BUMP(arcstat_l2_cksum_bad);
+		else
+			abd_copy(cb->l2rrc_abd, zio->io_abd, size);
+	}
+	zio->io_private = cb->l2rrc_private;
+	cb->l2rrc_done(zio);
+	abd_free(zio->io_abd);
+	kmem_free(cb, sizeof (*cb));
+}
+
+/*
+ * Read a verified on-disk representation without populating L1 or falling
+ * back to the pool. The parent keeps the destination ABD alive until done.
+ */
+zio_t *
+arc_read_l2_raw(zio_t *pio, spa_t *spa, const blkptr_t *bp, abd_t *abd,
+    zio_done_func_t *done, void *private, zio_priority_t priority)
+{
+	arc_buf_hdr_t *hdr;
+	kmutex_t *hash_lock;
+	vdev_t *vd;
+	uint64_t addr;
+	uint64_t size = BP_GET_PSIZE(bp);
+	uint64_t asize;
+	l2arc_raw_read_callback_t *cb;
+	zio_t *zio;
+
+	ASSERT3P(pio, !=, NULL);
+	ASSERT3P(done, !=, NULL);
+	hdr = buf_hash_find(spa_load_guid(spa), bp, &hash_lock);
+	if (hdr == NULL)
+		return (NULL);
+
+	if (!HDR_HAS_L2HDR(hdr) || HDR_L2_WRITING(hdr) ||
+	    HDR_L2_EVICTED(hdr) ||
+	    (l2arc_norw && hdr->b_l2hdr.b_dev->l2ad_writing)) {
+		mutex_exit(hash_lock);
+		return (NULL);
+	}
+	vd = hdr->b_l2hdr.b_dev->l2ad_vdev;
+	if (vd == NULL || vdev_is_dead(vd) ||
+	    !spa_config_tryenter(spa, SCL_L2ARC, vd, RW_READER)) {
+		mutex_exit(hash_lock);
+		return (NULL);
+	}
+	addr = hdr->b_l2hdr.b_daddr;
+	asize = vdev_psize_to_asize(vd, size);
+	hdr->b_l2hdr.b_hits++;
+	mutex_exit(hash_lock);
+
+	/*
+	 * The entry may be evicted or overwritten after dropping the hash
+	 * lock. Verify the BP checksum before using any bytes from the cache.
+	 */
+	cb = kmem_alloc(sizeof (*cb), KM_SLEEP);
+	cb->l2rrc_abd = abd;
+	cb->l2rrc_done = done;
+	cb->l2rrc_private = private;
+	zio = zio_read_phys(pio, vd, addr, asize,
+	    abd_alloc_for_io(asize, BP_GET_BUFC_TYPE(bp) == ARC_BUFC_METADATA),
+	    ZIO_CHECKSUM_OFF, l2arc_raw_read_done, cb, priority,
+	    ZIO_FLAG_CANFAIL | ZIO_FLAG_DONT_PROPAGATE | ZIO_FLAG_DONT_RETRY,
+	    B_FALSE);
+	zio->io_bp_copy = *bp;
+	ARCSTAT_BUMP(arcstat_l2_hits);
+	ARCSTAT_INCR(arcstat_l2_read_bytes, size);
+	return (zio);
 }
 
 arc_prune_t *

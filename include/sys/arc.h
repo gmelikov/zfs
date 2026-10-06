@@ -307,6 +307,8 @@ int arc_referenced(arc_buf_t *buf);
 int arc_read(zio_t *pio, spa_t *spa, const blkptr_t *bp,
     arc_read_done_func_t *done, void *priv, zio_priority_t priority,
     int flags, arc_flags_t *arc_flags, const zbookmark_phys_t *zb);
+zio_t *arc_read_l2_raw(zio_t *pio, spa_t *spa, const blkptr_t *bp,
+    abd_t *abd, zio_done_func_t *done, void *priv, zio_priority_t priority);
 zio_t *arc_write(zio_t *pio, spa_t *spa, uint64_t txg, blkptr_t *bp,
     arc_buf_t *buf, boolean_t uncached, boolean_t l2arc, const zio_prop_t *zp,
     arc_write_done_func_t *ready, arc_write_done_func_t *child_ready,
