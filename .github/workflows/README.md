@@ -70,6 +70,42 @@ can also alter the selection. The `workflow_dispatch` trigger accepts
 `fedora_kernel_ver` (Fedora-only run with a chosen kernel) and
 `specific_os` (pin the matrix to one OS).
 
+### Reusing fork QEMU results
+
+This initial experiment allows reuse from `gmelikov/zfs` by default, so
+it can be tested in the PR introducing this change. Override the list
+with the base repository variable `ZTS_REUSE_FORKS`, a JSON array of
+trusted public forks. Set it to `[]` to disable reuse.
+
+For each requested OS, `test-config` looks for a successful job in the
+latest push run for the exact PR head SHA. The run must be completed and
+no more than seven days old. Build, test and summary steps must all have
+completed successfully on `ubuntu-24.04`.
+Push runs use full tests, so they also cover PRs requesting quick tests.
+`ZTS_OS_OVERRIDE` in a fork can reduce the available OS results; missing
+OS jobs still run in the base repository. Dispatch and PR runs are not
+reused because they can select different inputs or test suites.
+
+Reused matrix jobs report success with a link to the original job and
+logs. The cleanup summary links to these results; their artifacts remain
+in the fork. Failed jobs, unavailable API responses and incomplete runs
+fall back to normal testing. Only the latest run and its latest job
+results are considered, so an older success cannot replace a
+newer failure. Only completed workflows are reused, even if individual
+jobs in a running workflow have already finished.
+
+The allowlist is a trust decision: fork owners control repository
+settings and runners. This prototype does not compare workflow or script
+contents with the PR base, allowing its own PR to demonstrate reuse.
+Step results alone do not make an arbitrary fork a trusted source of
+required checks. Comparing CI files is deferred to a later change.
+
+Run the offline regression tests with:
+
+```sh
+python3 .github/workflows/scripts/test-reuse-qemu.py
+```
+
 ### Supported guests
 
 Auto-selected:
