@@ -2209,7 +2209,7 @@ zvol_is_zvol(const char *name)
 }
 
 int
-zvol_init_impl(void)
+zvol_init_impl(boolean_t dynamic)
 {
 	int i;
 
@@ -2271,7 +2271,7 @@ zvol_init_impl(void)
 		    ZVOL_DRIVER, i);
 		ztqs->tqs_taskq[i] = taskq_create(name, per_tq_thread,
 		    maxclsyspri, per_tq_thread, INT_MAX,
-		    TASKQ_PREPOPULATE | TASKQ_DYNAMIC);
+		    TASKQ_PREPOPULATE | (dynamic ? TASKQ_DYNAMIC : 0));
 		if (ztqs->tqs_taskq[i] == NULL) {
 			for (int j = i - 1; j >= 0; j--)
 				taskq_destroy(ztqs->tqs_taskq[j]);
@@ -2300,6 +2300,7 @@ zvol_fini_impl(void)
 	zv_taskq_t *ztqs = &zvol_taskqs;
 
 	zvol_remove_minors_impl(NULL);
+	zvol_os_drain();
 
 	kmem_free(zvol_htable, ZVOL_HT_SIZE * sizeof (struct hlist_head));
 	list_destroy(&zvol_state_list);
@@ -2310,6 +2311,8 @@ zvol_fini_impl(void)
 	} else {
 		for (uint_t i = 0; i < ztqs->tqs_cnt; i++) {
 			ASSERT3P(ztqs->tqs_taskq[i], !=, NULL);
+			/* Drain callbacks before disabling further dispatch. */
+			taskq_wait(ztqs->tqs_taskq[i]);
 			taskq_destroy(ztqs->tqs_taskq[i]);
 		}
 		kmem_free(ztqs->tqs_taskq, ztqs->tqs_cnt *

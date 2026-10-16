@@ -1637,7 +1637,12 @@ zvol_busy(void)
 int
 zvol_init(void)
 {
-	return (zvol_init_impl());
+	return (zvol_init_impl(B_TRUE));
+}
+
+void
+zvol_os_drain(void)
+{
 }
 
 void

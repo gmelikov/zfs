@@ -99,6 +99,241 @@ struct zvol_state_os {
 
 static struct ida zvol_ida;
 
+typedef struct zvol_io_queue zvol_io_queue_t;
+
+typedef struct zvol_io_worker {
+	taskq_ent_t		ziw_ent;
+	wait_queue_head_t	ziw_wait;
+	uint64_t		ziw_completed;
+	zvol_io_queue_t		*ziw_queue;
+	uint_t			ziw_index;
+} zvol_io_worker_t;
+
+typedef struct zvol_io_stats {
+	kstat_named_t		zis_workers;
+	kstat_named_t		zis_awake;
+	kstat_named_t		zis_completed;
+} zvol_io_stats_t;
+
+struct zvol_io_queue {
+	struct list_head	*ziq_incoming ____cacheline_aligned_in_smp;
+	spinlock_t		ziq_lock ____cacheline_aligned_in_smp;
+	struct list_head	*ziq_ready;
+	unsigned long		*ziq_busy;
+	uint_t			ziq_nworkers;
+	zvol_io_worker_t		*ziq_workers;
+	taskq_t			*ziq_taskq;
+	boolean_t		ziq_stopping;
+	kstat_t			*ziq_kstat;
+	zvol_io_stats_t		ziq_stats;
+} ____cacheline_aligned_in_smp;
+
+static zvol_io_queue_t *zvol_io_queues;
+static void zvol_run_queue(void *);
+
+static void
+zvol_io_kick(zvol_io_queue_t *q)
+{
+	uint_t index;
+
+	while ((index = find_first_zero_bit(q->ziq_busy,
+	    q->ziq_nworkers)) < q->ziq_nworkers) {
+		if (test_and_set_bit(index, q->ziq_busy))
+			continue;
+		zvol_io_worker_t *worker = &q->ziq_workers[index];
+		wake_up(&worker->ziw_wait);
+		break;
+	}
+}
+
+static taskq_ent_t *
+zvol_io_next(zvol_io_queue_t *q)
+{
+	struct list_head *node;
+	unsigned long flags;
+
+	/* Submitters never take this lock. */
+	spin_lock_irqsave(&q->ziq_lock, flags);
+	if (q->ziq_ready == NULL) {
+		node = xchg(&q->ziq_incoming, NULL);
+		/* Reverse the detached stack to preserve publication order. */
+		while (node != NULL) {
+			struct list_head *next = node->next;
+			node->next = q->ziq_ready;
+			q->ziq_ready = node;
+			node = next;
+		}
+	}
+	node = q->ziq_ready;
+	if (node != NULL)
+		WRITE_ONCE(q->ziq_ready, node->next);
+	spin_unlock_irqrestore(&q->ziq_lock, flags);
+	return (node == NULL ? NULL :
+	    list_entry(node, taskq_ent_t, tqent_list));
+}
+
+static void
+zvol_run_queue(void *arg)
+{
+	zvol_io_worker_t *worker = arg;
+	zvol_io_queue_t *q = worker->ziw_queue;
+	uint_t index = worker->ziw_index;
+
+	for (;;) {
+		taskq_ent_t *ent = zvol_io_next(q);
+
+		if (ent != NULL) {
+			/* Its callback can block and free this request. */
+			ent->tqent_func(ent->tqent_arg);
+			WRITE_ONCE(worker->ziw_completed,
+			    worker->ziw_completed + 1);
+			cond_resched();
+			continue;
+		}
+
+		clear_bit(index, q->ziq_busy);
+		smp_mb__after_atomic();
+		/* Pair with publication before the submitter's idle check. */
+		if (READ_ONCE(q->ziq_ready) != NULL ||
+		    READ_ONCE(q->ziq_incoming) != NULL) {
+			set_bit(index, q->ziq_busy);
+			continue;
+		}
+		wait_event_idle(worker->ziw_wait, READ_ONCE(q->ziq_stopping) ||
+		    test_bit(index, q->ziq_busy));
+		if (READ_ONCE(q->ziq_stopping))
+			break;
+	}
+	clear_bit(index, q->ziq_busy);
+}
+
+static void
+zvol_dispatch(uint_t index, task_func_t func,
+    zv_request_task_t *task)
+{
+	zvol_io_queue_t *q = &zvol_io_queues[index];
+	struct list_head *node = &task->ent.tqent_list;
+	struct list_head *head;
+
+	task->ent.tqent_func = func;
+	task->ent.tqent_arg = task;
+	do {
+		head = READ_ONCE(q->ziq_incoming);
+		node->next = head;
+	} while (cmpxchg(&q->ziq_incoming, head, node) != head);
+	/* Successful cmpxchg publishes the request before the idle check. */
+	zvol_io_kick(q);
+}
+
+static int
+zvol_io_stats_update(kstat_t *ksp, int rw)
+{
+	zvol_io_queue_t *q = ksp->ks_private;
+	uint64_t completed = 0;
+	uint64_t awake = 0;
+
+	if (rw == KSTAT_WRITE)
+		return (EACCES);
+	for (uint_t i = 0; i < q->ziq_nworkers; i++) {
+		completed += READ_ONCE(q->ziq_workers[i].ziw_completed);
+		awake += test_bit(i, q->ziq_busy) != 0;
+	}
+	q->ziq_stats.zis_workers.value.ui64 = q->ziq_nworkers;
+	q->ziq_stats.zis_awake.value.ui64 = awake;
+	q->ziq_stats.zis_completed.value.ui64 = completed;
+	return (0);
+}
+
+static void
+zvol_io_queues_init(void)
+{
+	zv_taskq_t *ztqs = &zvol_taskqs;
+
+	zvol_io_queues = kmem_zalloc(ztqs->tqs_cnt *
+	    sizeof (*zvol_io_queues), KM_SLEEP);
+	for (uint_t i = 0; i < ztqs->tqs_cnt; i++) {
+		zvol_io_queue_t *q = &zvol_io_queues[i];
+
+		spin_lock_init(&q->ziq_lock);
+		q->ziq_taskq = ztqs->tqs_taskq[i];
+		q->ziq_nworkers = q->ziq_taskq->tq_maxthreads;
+		q->ziq_busy = kmem_zalloc(BITS_TO_LONGS(q->ziq_nworkers) *
+		    sizeof (*q->ziq_busy), KM_SLEEP);
+		q->ziq_workers = kmem_zalloc(q->ziq_nworkers *
+		    sizeof (*q->ziq_workers), KM_SLEEP);
+		for (uint_t j = 0; j < q->ziq_nworkers; j++) {
+			zvol_io_worker_t *worker = &q->ziq_workers[j];
+
+			worker->ziw_queue = q;
+			worker->ziw_index = j;
+			taskq_init_ent(&worker->ziw_ent);
+			init_waitqueue_head(&worker->ziw_wait);
+		}
+		char name[32];
+		(void) snprintf(name, sizeof (name), "io_queue-%u", i);
+		q->ziq_stats = (zvol_io_stats_t) {
+			{ "workers", KSTAT_DATA_UINT64 },
+			{ "awake", KSTAT_DATA_UINT64 },
+			{ "completed", KSTAT_DATA_UINT64 },
+		};
+		q->ziq_kstat = kstat_create("zvol", 0, name, "misc",
+		    KSTAT_TYPE_NAMED, sizeof (q->ziq_stats) /
+		    sizeof (kstat_named_t), KSTAT_FLAG_VIRTUAL);
+		if (q->ziq_kstat != NULL) {
+			q->ziq_kstat->ks_private = q;
+			q->ziq_kstat->ks_update = zvol_io_stats_update;
+			q->ziq_kstat->ks_data = &q->ziq_stats;
+			kstat_install(q->ziq_kstat);
+		}
+		for (uint_t j = 0; j < q->ziq_nworkers; j++) {
+			zvol_io_worker_t *worker = &q->ziq_workers[j];
+
+			set_bit(j, q->ziq_busy);
+			taskq_dispatch_ent(q->ziq_taskq, zvol_run_queue, worker,
+			    0, &worker->ziw_ent);
+		}
+	}
+}
+
+void
+zvol_os_drain(void)
+{
+	if (zvol_io_queues == NULL)
+		return;
+	/* Removed minors have no pending I/O or remaining submitters. */
+	for (uint_t i = 0; i < zvol_taskqs.tqs_cnt; i++) {
+		zvol_io_queue_t *q = &zvol_io_queues[i];
+
+		WRITE_ONCE(q->ziq_stopping, B_TRUE);
+		for (uint_t j = 0; j < q->ziq_nworkers; j++)
+			wake_up(&q->ziq_workers[j].ziw_wait);
+	}
+}
+
+static void
+zvol_io_queues_fini(void)
+{
+	/* All submitters and taskq callbacks have finished at this point. */
+	for (uint_t i = 0; i < zvol_taskqs.tqs_cnt; i++) {
+		zvol_io_queue_t *q = &zvol_io_queues[i];
+
+		ASSERT3P(q->ziq_incoming, ==, NULL);
+		ASSERT3P(q->ziq_ready, ==, NULL);
+		ASSERT(q->ziq_stopping);
+		ASSERT3U(find_first_bit(q->ziq_busy, q->ziq_nworkers), ==,
+		    q->ziq_nworkers);
+		if (q->ziq_kstat != NULL)
+			kstat_delete(q->ziq_kstat);
+		kmem_free(q->ziq_busy, BITS_TO_LONGS(q->ziq_nworkers) *
+		    sizeof (*q->ziq_busy));
+		kmem_free(q->ziq_workers, q->ziq_nworkers *
+		    sizeof (*q->ziq_workers));
+	}
+	kmem_free(zvol_io_queues, zvol_taskqs.tqs_cnt *
+	    sizeof (*zvol_io_queues));
+	zvol_io_queues = NULL;
+}
+
 /*
  * This is called when a new block multiqueue request comes in.  A request
  * contains one or more BIOs.
@@ -626,16 +861,16 @@ zvol_request_impl(zvol_state_t *zv, struct bio *bio, struct request *rq,
 				zvol_discard(&zvr);
 			} else {
 				task = zv_request_task_create(zvr);
-				taskq_dispatch_ent(ztqs->tqs_taskq[tq_idx],
-				    zvol_discard_task, task, 0, &task->ent);
+				zvol_dispatch(tq_idx,
+				    zvol_discard_task, task);
 			}
 		} else {
 			if (force_sync) {
 				zvol_write(&zvr);
 			} else {
 				task = zv_request_task_create(zvr);
-				taskq_dispatch_ent(ztqs->tqs_taskq[tq_idx],
-				    zvol_write_task, task, 0, &task->ent);
+				zvol_dispatch(tq_idx,
+				    zvol_write_task, task);
 			}
 		}
 	} else {
@@ -656,8 +891,8 @@ zvol_request_impl(zvol_state_t *zv, struct bio *bio, struct request *rq,
 			zvol_read(&zvr);
 		} else {
 			task = zv_request_task_create(zvr);
-			taskq_dispatch_ent(ztqs->tqs_taskq[tq_idx],
-			    zvol_read_task, task, 0, &task->ent);
+			zvol_dispatch(tq_idx,
+			    zvol_read_task, task);
 		}
 	}
 
@@ -1831,7 +2066,7 @@ zvol_init(void)
 {
 	int error;
 
-	error = zvol_init_impl();
+	error = zvol_init_impl(B_FALSE);
 	if (error) {
 		printk(KERN_INFO "ZFS: zvol_init_impl() failed %d\n", error);
 		return (error);
@@ -1839,6 +2074,7 @@ zvol_init(void)
 
 	error = -register_blkdev(zvol_major, ZVOL_DRIVER);
 	if (error) {
+		zvol_fini_impl();
 		printk(KERN_INFO "ZFS: register_blkdev() failed %d\n", error);
 		return (SET_ERROR(error));
 	}
@@ -1858,6 +2094,7 @@ zvol_init(void)
 	}
 
 	ida_init(&zvol_ida);
+	zvol_io_queues_init();
 	return (0);
 }
 
@@ -1867,6 +2104,7 @@ zvol_fini(void)
 	unregister_blkdev(zvol_major, ZVOL_DRIVER);
 
 	zvol_fini_impl();
+	zvol_io_queues_fini();
 
 	ida_destroy(&zvol_ida);
 }

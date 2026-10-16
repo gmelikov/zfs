@@ -107,7 +107,7 @@ void zvol_log_write(zvol_state_t *zv, dmu_tx_t *tx, uint64_t offset,
     uint64_t size, boolean_t commit);
 int zvol_get_data(void *arg, uint64_t arg2, lr_write_t *lr, char *buf,
     struct lwb *lwb, zio_t *zio);
-int zvol_init_impl(void);
+int zvol_init_impl(boolean_t dynamic);
 void zvol_fini_impl(void);
 void zvol_wait_close(zvol_state_t *zv);
 int zvol_clone_range(zvol_state_handle_t *, uint64_t,
@@ -121,6 +121,7 @@ void zv_request_task_free(zv_request_task_t *task);
 /*
  * platform dependent functions exported to platform independent code
  */
+void zvol_os_drain(void);
 void zvol_os_free(zvol_state_t *zv);
 int zvol_os_rename_minor(zvol_state_t *zv, const char *newname);
 int zvol_os_create_minor(const char *name);
