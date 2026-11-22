@@ -49,6 +49,14 @@ extern void brt_unload(spa_t *spa);
 extern void brt_sync(spa_t *spa, uint64_t txg);
 extern void brt_prefetch_all(spa_t *spa);
 
+extern boolean_t brt_reloc_eligible(const blkptr_t *);
+extern int brt_reloc_read_start(zio_t *);
+extern void brt_reloc_read_done(zio_t *);
+extern boolean_t brt_reloc_resolve(spa_t *, const blkptr_t *, blkptr_t *);
+extern boolean_t brt_reloc_retire(spa_t *, const blkptr_t *);
+extern int brt_relocate(spa_t *, const blkptr_t *, const blkptr_t *,
+    dmu_tx_t *);
+
 #ifdef	__cplusplus
 }
 #endif

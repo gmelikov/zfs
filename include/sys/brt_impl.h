@@ -24,19 +24,16 @@ extern "C" {
  * BRT - Block Reference Table.
  */
 #define	BRT_OBJECT_VDEV_PREFIX	"com.fudosecurity:brt:vdev:"
+#define	BRT_RELOC_MAP_NAME	"org.openzfs:brt:relocations"
 
 /*
  * We divide each VDEV into 16MB chunks. Each chunk is represented in memory
- * by a 16bit counter, thus 1TB VDEV requires 128kB of memory: (1TB / 16MB) * 2B
- * Each element in this array represents how many BRT entries do we have in this
- * chunk of storage. We always load this entire array into memory and update as
- * needed. By having it in memory we can quickly tell (during zio_free()) if
- * there are any BRT entries that we might need to update.
- *
- * This value cannot be larger than 16MB, at least as long as we support
- * 512 byte block sizes. With 512 byte block size we can have exactly
- * 32768 blocks in 16MB. In 32MB we could have 65536 blocks, which is one too
- * many for a 16bit counter.
+ * by a 16-bit counter, thus 1TB VDEV requires 128kB of memory:
+ * (1TB / 16MB) * 2B. Each element is a lookup hint for BRT entries in this
+ * chunk. We always load this entire array into memory and update as needed.
+ * By having it in memory we can quickly tell (during zio_free()) if there are
+ * any ordinary BRT entries that we might need to update. Relocated entries
+ * are tracked in the relocation map and do not contribute to this count.
  */
 #define	BRT_RANGESIZE	(16 * 1024 * 1024)
 _Static_assert(BRT_RANGESIZE / SPA_MINBLOCKSIZE <= UINT16_MAX,
@@ -118,7 +115,7 @@ struct brt_vdev {
 	 */
 	uint64_t	bv_size;
 	/*
-	 * This is the array with BRT entry count per BRT_RANGESIZE.
+	 * This is the ordinary BRT entry count per BRT_RANGESIZE.
 	 */
 	uint16_t	*bv_entcount;
 	/*
@@ -142,9 +139,10 @@ struct brt_vdev {
 	 */
 	boolean_t	bv_meta_dirty;
 	/*
-	 * Sum of all bv_entcount[]s.
+	 * Total ordinary BRT entries on this vdev.
 	 */
 	uint64_t	bv_totalcount;
+	uint64_t	bv_reloc_count;
 	/*
 	 * Space on disk occupied by cloned blocks (without compression).
 	 */
@@ -194,6 +192,9 @@ typedef struct brt_entry {
 	uint64_t	bre_count;
 	uint64_t	bre_pcount;
 } brt_entry_t;
+
+#define	BRT_RELOC_KEY_WORDS	3
+#define	BRT_RELOC_WORDS		8
 
 #ifdef	__cplusplus
 }

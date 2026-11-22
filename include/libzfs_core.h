@@ -119,6 +119,8 @@ _LIBZFS_CORE_H int lzc_send_progress(const char *, int, uint64_t *, uint64_t *);
 
 _LIBZFS_CORE_H boolean_t lzc_exists(const char *);
 
+_LIBZFS_CORE_H int lzc_brt_relocate(const char *, uint64_t, uint64_t,
+    const uint64_t *, uint_t, nvlist_t **);
 _LIBZFS_CORE_H int lzc_rollback(const char *, char *, int);
 _LIBZFS_CORE_H int lzc_rollback_to(const char *, const char *);
 

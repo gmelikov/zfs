@@ -286,6 +286,23 @@ out:
 }
 
 int
+lzc_brt_relocate(const char *pool, uint64_t guid, uint64_t limit,
+    const uint64_t *cursor, uint_t count, nvlist_t **result)
+{
+	if (result == NULL)
+		return (EINVAL);
+
+	nvlist_t *args = fnvlist_alloc();
+	fnvlist_add_uint64(args, "guid", guid);
+	fnvlist_add_uint64(args, "bytes", limit);
+	if (cursor != NULL)
+		fnvlist_add_uint64_array(args, "cursor", cursor, count);
+	int error = lzc_ioctl(ZFS_IOC_BRT_RELOCATE, pool, args, result);
+	fnvlist_free(args);
+	return (error);
+}
+
+int
 lzc_scrub(zfs_ioc_t ioc, const char *name,
     nvlist_t *source, nvlist_t **resultp)
 {

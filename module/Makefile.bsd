@@ -284,6 +284,7 @@ SRCS+=	abd.c \
 	dnode_sync.c \
 	dsl_bookmark.c \
 	dsl_crypt.c \
+	dsl_bpr.c \
 	dsl_dataset.c \
 	dsl_deadlist.c \
 	dsl_deleg.c \

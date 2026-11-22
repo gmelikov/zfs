@@ -1,0 +1,59 @@
+.\" SPDX-License-Identifier: CDDL-1.0
+.\"
+.\" This file and its contents are supplied under the terms of the
+.\" Common Development and Distribution License ("CDDL"), version 1.0.
+.\" You may only use this file in accordance with the terms of version
+.\" 1.0 of the CDDL.
+.\"
+.\" A full copy of the text of the CDDL should have accompanied this
+.\" source.  A copy of the CDDL is also available via the Internet at
+.\" https://opensource.org/license/CDDL-1.0.
+.\"
+.\"
+.Dd November 20, 2026
+.Dt ZPOOL-RELOCATE 8
+.Os
+.
+.Sh NAME
+.Nm zpool-relocate
+.Nd relocate eligible file blocks from a special vdev
+.
+.Sh SYNOPSIS
+.Nm zpool
+.Cm relocate
+.Op Fl b Ar bytes
+.Op Fl c Ar cursor
+.Ar pool Ar vdev
+.
+.Sh DESCRIPTION
+Relocate a batch of file blocks from a top-level special vdev to the normal
+allocation class while the pool is online.
+The pool must have the
+.Sy brt_relocation
+feature enabled.
+The command supports file and volume data and metadata with equal source
+and destination allocation sizes.
+Each distinct block is moved once, including blocks shared by snapshots or
+block clones.
+.Pp
+Blocks whose source and destination allocation sizes differ are skipped.
+The command prints the number of relocated blocks, bytes, skipped blocks and
+visited pointers, a completion flag, an error number, and a cursor.
+Pass the cursor to the next invocation to continue the same pass.
+The first invocation fixes the upper birth TXG of the pass.
+Start a new pass to consider later allocations.
+A completed pass makes the released space available to the pool.
+Use
+.Xr zpool-remove 8
+to remove the device and copy its remaining allocations.
+.Bl -tag -width Ds
+.It Fl b Ar bytes
+Limit the total allocation size moved by this invocation.
+The default is 1 MiB.
+.It Fl c Ar cursor
+Continue a pass using the cursor printed by an earlier invocation.
+.El
+.
+.Sh SEE ALSO
+.Xr zpool-features 7 ,
+.Xr zpool-remove 8

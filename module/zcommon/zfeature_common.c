@@ -816,6 +816,19 @@ zpool_feature_init(void)
 	    "com.klarasystems:anyraid", "anyraid", "Support for anyraid VDEV",
 	    ZFEATURE_FLAG_MOS, ZFEATURE_TYPE_BOOLEAN, NULL, sfeatures);
 
+	{
+		static const spa_feature_t brt_relocation_deps[] = {
+			SPA_FEATURE_BLOCK_CLONING,
+			SPA_FEATURE_NONE
+		};
+		zfeature_register(SPA_FEATURE_BRT_RELOCATION,
+		    "org.openzfs:brt_relocation", "brt_relocation",
+		    "Experimental BRT block relocation.",
+		    ZFEATURE_FLAG_MOS | ZFEATURE_FLAG_NO_UPGRADE |
+		    ZFEATURE_FLAG_NO_CREATE, ZFEATURE_TYPE_BOOLEAN,
+		    brt_relocation_deps, sfeatures);
+	}
+
 	zfs_mod_list_supported_free(sfeatures);
 }
 

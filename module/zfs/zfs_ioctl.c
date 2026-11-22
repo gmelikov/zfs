@@ -166,6 +166,7 @@
 #include <sys/vdev.h>
 #include <sys/vdev_impl.h>
 #include <sys/dmu.h>
+#include <sys/dsl_bpr.h>
 #include <sys/dsl_dir.h>
 #include <sys/dsl_dataset.h>
 #include <sys/dsl_prop.h>
@@ -5161,6 +5162,53 @@ zfs_ioc_rollback(const char *fsname, nvlist_t *innvl, nvlist_t *outnvl)
 	return (error);
 }
 
+static const zfs_ioc_key_t zfs_keys_brt_relocate[] = {
+	{"guid",	DATA_TYPE_UINT64,	0},
+	{"bytes",	DATA_TYPE_UINT64,	0},
+	{"cursor",	DATA_TYPE_UINT64_ARRAY,	ZK_OPTIONAL},
+};
+
+static int
+zfs_ioc_brt_relocate(const char *pool, nvlist_t *in, nvlist_t *out)
+{
+	bpr_batch_result_t result = { 0 };
+	bpr_batch_cursor_t *cursor = &result.br_cursor;
+
+	if (nvlist_exists(in, "cursor")) {
+		uint64_t *values;
+		uint_t count;
+		if (nvlist_lookup_uint64_array(in, "cursor", &values, &count) !=
+		    0 || count != BPR_BATCH_CURSOR_WORDS)
+			return (SET_ERROR(EINVAL));
+		*cursor = (bpr_batch_cursor_t) {
+			.bc_vdev_guid = values[0],
+			.bc_max_birth = values[1],
+			.bc_dsobj = values[2],
+			.bc_ds_guid = values[3],
+			.bc_object = values[4],
+			.bc_blkid = values[5],
+		};
+	}
+
+	int error = dsl_bpr_batch(pool, fnvlist_lookup_uint64(in, "guid"),
+	    fnvlist_lookup_uint64(in, "bytes"), &result);
+	if (error != 0)
+		return (error);
+
+	uint64_t values[BPR_BATCH_CURSOR_WORDS] = {
+		cursor->bc_vdev_guid, cursor->bc_max_birth, cursor->bc_dsobj,
+		cursor->bc_ds_guid, cursor->bc_object, cursor->bc_blkid
+	};
+	fnvlist_add_uint64_array(out, "cursor", values, ARRAY_SIZE(values));
+	fnvlist_add_uint64(out, "blocks", result.br_blocks);
+	fnvlist_add_uint64(out, "bytes", result.br_bytes);
+	fnvlist_add_uint64(out, "skipped", result.br_skipped);
+	fnvlist_add_uint64(out, "visited", result.br_visited);
+	fnvlist_add_boolean_value(out, "done", result.br_done);
+	fnvlist_add_int32(out, "error", result.br_error);
+	return (0);
+}
+
 static int
 recursive_unmount(const char *fsname, void *arg)
 {
@@ -8066,6 +8114,11 @@ zfs_ioctl_init(void)
 	    zfs_ioc_rollback, zfs_secpolicy_rollback, DATASET_NAME,
 	    POOL_CHECK_SUSPENDED | POOL_CHECK_READONLY, B_FALSE, B_TRUE,
 	    zfs_keys_rollback, ARRAY_SIZE(zfs_keys_rollback));
+
+	zfs_ioctl_register("brt_relocate", ZFS_IOC_BRT_RELOCATE,
+	    zfs_ioc_brt_relocate, zfs_secpolicy_config, POOL_NAME,
+	    POOL_CHECK_SUSPENDED | POOL_CHECK_READONLY, B_FALSE, B_TRUE,
+	    zfs_keys_brt_relocate, ARRAY_SIZE(zfs_keys_brt_relocate));
 
 	zfs_ioctl_register("bookmark", ZFS_IOC_BOOKMARK,
 	    zfs_ioc_bookmark, zfs_secpolicy_bookmark, POOL_NAME,

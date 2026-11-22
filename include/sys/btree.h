@@ -214,6 +214,10 @@ void *zfs_btree_find(zfs_btree_t *, const void *, zfs_btree_index_t *);
 void zfs_btree_add_idx(zfs_btree_t *, const void *,
     const zfs_btree_index_t *);
 
+/* For batches whose caller verifies the tree once after all insertions. */
+void zfs_btree_add_idx_unverified(zfs_btree_t *, const void *,
+    const zfs_btree_index_t *);
+
 /*
  * Return the first or last valued node in the tree. Will return NULL if the
  * tree is empty. The index can be NULL if the location of the first or last

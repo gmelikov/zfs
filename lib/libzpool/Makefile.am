@@ -103,6 +103,7 @@ nodist_libzpool_la_SOURCES = \
 	module/zfs/dnode_sync.c \
 	module/zfs/dsl_bookmark.c \
 	module/zfs/dsl_crypt.c \
+	module/zfs/dsl_bpr.c \
 	module/zfs/dsl_dataset.c \
 	module/zfs/dsl_deadlist.c \
 	module/zfs/dsl_deleg.c \

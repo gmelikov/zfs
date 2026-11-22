@@ -53,6 +53,7 @@ COMMON_H = \
 	sys/dnode.h \
 	sys/dsl_bookmark.h \
 	sys/dsl_crypt.h \
+	sys/dsl_bpr.h \
 	sys/dsl_dataset.h \
 	sys/dsl_deadlist.h \
 	sys/dsl_deleg.h \

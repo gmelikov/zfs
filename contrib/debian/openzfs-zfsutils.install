@@ -122,6 +122,7 @@ usr/share/man/man8/zpool-online.8
 usr/share/man/man8/zpool-prefetch.8
 usr/share/man/man8/zpool-prefetch.8
 usr/share/man/man8/zpool-reguid.8
+usr/share/man/man8/zpool-relocate.8
 usr/share/man/man8/zpool-remove.8
 usr/share/man/man8/zpool-reopen.8
 usr/share/man/man8/zpool-replace.8

@@ -2188,6 +2188,12 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/removal/removal_indirect_mapping_size.ksh \
 	functional/removal/removal_multiple_indirection.ksh \
 	functional/removal/removal_nopwrite.ksh \
+	functional/removal/removal_relocated_blocks.ksh \
+	functional/removal/removal_relocated_dedup.ksh \
+	functional/removal/removal_relocated_encrypted.ksh \
+	functional/removal/removal_relocated_metadata.ksh \
+	functional/removal/removal_relocated_zvol.ksh \
+	functional/removal/removal_relocated_skipped.ksh \
 	functional/removal/removal_remap_deadlists.ksh \
 	functional/removal/removal_reservation.ksh \
 	functional/removal/removal_resume_export.ksh \

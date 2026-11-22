@@ -1147,7 +1147,7 @@ zap_cursor_retrieve(zap_cursor_t *zc, zap_attribute_t *za)
 	rw_enter(&zc->zc_zap->zap_rwlock, RW_READER);
 
 	if (!zc->zc_zap->zap_ismicro) {
-		err = fzap_cursor_retrieve(zc->zc_zap, zc, za);
+		err = fzap_cursor_retrieve(zc->zc_zap, zc, za, NULL);
 	} else {
 		zfs_btree_index_t idx;
 		mzap_ent_t mze_tofind;
@@ -1183,6 +1183,35 @@ zap_cursor_retrieve(zap_cursor_t *zc, zap_attribute_t *za)
 
 	rw_exit(&zc->zc_zap->zap_rwlock);
 	return (err);
+}
+
+int
+zap_cursor_retrieve_uint64(zap_cursor_t *zc, uint16_t key_words, uint64_t *key,
+    uint64_t value_words, uint64_t *value)
+{
+	zap_t *zap = zc->zc_zap;
+
+	if (zap == NULL)
+		return (SET_ERROR(EIO));
+	if (zc->zc_hash == -1ULL)
+		return (SET_ERROR(ENOENT));
+	if (key_words > UINT16_MAX / sizeof (*key))
+		return (SET_ERROR(EINVAL));
+
+	const zap_cursor_words_t words = {
+		.zcw_key = key,
+		.zcw_value = value,
+		.zcw_value_words = value_words,
+		.zcw_key_words = key_words,
+	};
+	int error;
+	rw_enter(&zap->zap_rwlock, RW_READER);
+	if (zap->zap_ismicro || !(zap_getflags(zap) & ZAP_FLAG_UINT64_KEY))
+		error = SET_ERROR(ECKSUM);
+	else
+		error = fzap_cursor_retrieve(zap, zc, NULL, &words);
+	rw_exit(&zap->zap_rwlock);
+	return (error);
 }
 
 void

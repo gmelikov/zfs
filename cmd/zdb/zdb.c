@@ -221,13 +221,19 @@ sublivelist_verify_blkptr(void *arg, const blkptr_t *bp, boolean_t free,
 	} else {
 		if (pair == NULL) {
 			/* block that is currently marked as allocated */
+			blkptr_t physical;
+			uint64_t allocated_txg = BP_GET_BIRTH(bp);
+			if (brt_reloc_resolve(spa, bp, &physical)) {
+				bp = &physical;
+				allocated_txg = BP_GET_PHYSICAL_BIRTH(bp);
+			}
 			for (int i = 0; i < SPA_DVAS_PER_BP; i++) {
 				if (DVA_IS_EMPTY(&bp->blk_dva[i]))
 					break;
 				sublivelist_verify_block_t svb = {
 				    .svb_dva = bp->blk_dva[i],
 				    .svb_allocated_txg =
-				    BP_GET_BIRTH(bp)
+				    allocated_txg
 				};
 
 				if (zfs_btree_find(&sv->sv_leftover, &svb,
@@ -2439,6 +2445,28 @@ dump_brt(spa_t *spa)
 	boolean_t do_histo = dump_opt['T'] == 3;
 
 	char dva[64];
+	uint64_t (*reloc_counts)[64] = NULL;
+	if (do_histo && spa->spa_brt_reloc_obj != 0) {
+		reloc_counts = kmem_zalloc(sizeof (*reloc_counts) *
+		    spa->spa_brt_nvdevs, KM_SLEEP);
+		zap_cursor_t zc;
+		zap_attribute_t *za = zap_attribute_alloc();
+		for (zap_cursor_init(&zc, spa->spa_meta_objset,
+		    spa->spa_brt_reloc_obj);
+		    zap_cursor_retrieve(&zc, za) == 0;
+		    zap_cursor_advance(&zc)) {
+			uint64_t key[BRT_RELOC_KEY_WORDS];
+			uint64_t value[BRT_RELOC_WORDS];
+			memcpy(key, za->za_name, sizeof (key));
+			VERIFY0(zap_lookup_uint64(spa->spa_meta_objset,
+			    spa->spa_brt_reloc_obj, key, BRT_RELOC_KEY_WORDS,
+			    sizeof (uint64_t), BRT_RELOC_WORDS, value));
+			if (value[0] != 0 && key[0] < spa->spa_brt_nvdevs)
+				reloc_counts[key[0]][highbit64(value[0])]++;
+		}
+		zap_cursor_fini(&zc);
+		zap_attribute_free(za);
+	}
 
 	if (!do_histo)
 		printf("\n%-16s %-10s\n", "DVA", "REFCNT");
@@ -2456,10 +2484,10 @@ dump_brt(spa_t *spa)
 		    brtvd->bv_mos_entries);
 		    zap_cursor_retrieve(&zc, za) == 0;
 		    zap_cursor_advance(&zc)) {
+			const uint64_t *key = (const uint64_t *)za->za_name;
 			uint64_t refcnt;
 			VERIFY0(zap_lookup_uint64(spa->spa_meta_objset,
-			    brtvd->bv_mos_entries,
-			    (const uint64_t *)za->za_name, 1,
+			    brtvd->bv_mos_entries, key, BRT_KEY_WORDS,
 			    za->za_integer_length, za->za_num_integers,
 			    &refcnt));
 
@@ -2479,10 +2507,48 @@ dump_brt(spa_t *spa)
 		zap_attribute_free(za);
 
 		if (do_histo) {
+			if (reloc_counts != NULL) {
+				for (int i = 0; i < 64; i++)
+					counts[i] += reloc_counts[vdevid][i];
+			}
 			printf("\nBRT: vdev %" PRIu64
 			    ": DVAs with 2^n refcnts:\n", vdevid);
 			dump_histogram(counts, 64, 0);
 		}
+	}
+	if (reloc_counts != NULL)
+		kmem_free(reloc_counts, sizeof (*reloc_counts) *
+		    spa->spa_brt_nvdevs);
+
+	if (!do_histo && spa->spa_brt_reloc_obj != 0) {
+		zap_cursor_t zc;
+		zap_attribute_t *za = zap_attribute_alloc();
+		for (zap_cursor_init(&zc, spa->spa_meta_objset,
+		    spa->spa_brt_reloc_obj);
+		    zap_cursor_retrieve(&zc, za) == 0;
+		    zap_cursor_advance(&zc)) {
+			uint64_t key[BRT_RELOC_KEY_WORDS];
+			uint64_t value[BRT_RELOC_WORDS];
+			memcpy(key, za->za_name, sizeof (key));
+			VERIFY0(zap_lookup_uint64(spa->spa_meta_objset,
+			    spa->spa_brt_reloc_obj, key, BRT_RELOC_KEY_WORDS,
+			    sizeof (uint64_t), BRT_RELOC_WORDS, value));
+			dva_t physical = { { value[1], value[2] } };
+			unsigned int copies = 1 + (value[4] != 0) +
+			    (value[6] != 0);
+			printf("%" PRIu64 ":%" PRIx64 "@%" PRIu64
+			    " -> %" PRIu64 ":%" PRIx64 "@%" PRIu64
+			    " refs=%" PRIu64,
+			    key[0], key[1], key[2],
+			    (uint64_t)DVA_GET_VDEV(&physical),
+			    (uint64_t)DVA_GET_OFFSET(&physical),
+			    value[3], value[0]);
+			if (copies > 1)
+				printf(" copies=%u", copies);
+			printf("\n");
+		}
+		zap_cursor_fini(&zc);
+		zap_attribute_free(za);
 	}
 }
 
@@ -6274,6 +6340,7 @@ static const char *zdb_ot_extname[] = {
 
 typedef struct zdb_brt_entry {
 	dva_t		zbre_dva;
+	uint64_t	zbre_birth;
 	uint64_t	zbre_refcount;
 	avl_node_t	zbre_node;
 } zdb_brt_entry_t;
@@ -6657,6 +6724,7 @@ ddt_done:
 		avl_index_t where;
 
 		zbre_search.zbre_dva = bp->blk_dva[0];
+		zbre_search.zbre_birth = BP_GET_PHYSICAL_BIRTH(bp);
 		zbre = avl_find(&zcb->zcb_brt, &zbre_search, &where);
 		if (zbre == NULL) {
 			uint64_t refcnt =
@@ -6665,7 +6733,8 @@ ddt_done:
 				brt_block = B_TRUE;
 				zbre = kmem_zalloc(sizeof (zdb_brt_entry_t),
 				    KM_SLEEP);
-				zbre->zbre_dva = bp->blk_dva[0];
+				zbre->zbre_dva = zbre_search.zbre_dva;
+				zbre->zbre_birth = zbre_search.zbre_birth;
 				zbre->zbre_refcount = refcnt;
 				avl_insert(&zcb->zcb_brt, zbre, where);
 			}
@@ -6679,6 +6748,10 @@ ddt_done:
 			}
 		}
 	}
+
+	blkptr_t physical;
+	if (brt_reloc_resolve(zcb->zcb_spa, bp, &physical))
+		bp = &physical;
 
 	for (i = 0; i < 4; i++) {
 		int l = (i < 2) ? BP_GET_LEVEL(bp) : ZB_TOTAL;
@@ -7943,13 +8016,15 @@ deleted_livelists_dump_mos(spa_t *spa)
 static int
 zdb_brt_entry_compare(const void *zcn1, const void *zcn2)
 {
-	const dva_t *dva1 = &((const zdb_brt_entry_t *)zcn1)->zbre_dva;
-	const dva_t *dva2 = &((const zdb_brt_entry_t *)zcn2)->zbre_dva;
+	const zdb_brt_entry_t *a = zcn1, *b = zcn2;
+	const dva_t *dva1 = &a->zbre_dva, *dva2 = &b->zbre_dva;
 	int cmp;
 
 	cmp = TREE_CMP(DVA_GET_VDEV(dva1), DVA_GET_VDEV(dva2));
 	if (cmp == 0)
 		cmp = TREE_CMP(DVA_GET_OFFSET(dva1), DVA_GET_OFFSET(dva2));
+	if (cmp == 0)
+		cmp = TREE_CMP(a->zbre_birth, b->zbre_birth);
 
 	return (cmp);
 }
@@ -9277,6 +9352,7 @@ dump_mos_leaks(spa_t *spa)
 			mos_obj_refd(brtvd->bv_mos_entries);
 		}
 	}
+	mos_obj_refd(spa->spa_brt_reloc_obj);
 
 	/*
 	 * Visit all allocated objects and make sure they are referenced.

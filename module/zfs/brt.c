@@ -29,6 +29,8 @@
 #include <sys/dsl_scan.h>
 #include <sys/vdev_impl.h>
 #include <sys/kstat.h>
+#include <sys/metaslab_impl.h>
+#include <cityhash.h>
 #include <sys/wmsum.h>
 
 /*
@@ -95,9 +97,10 @@
  * expensive by requiring additional I/Os if the BRT doesn't fit into memory.
  * This is the main problem with deduplication, so we've learned our lesson and
  * try not to repeat the same mistake here. How do we do that? We divide each
- * top-level VDEV into 16MB regions. For each region we maintain a counter that
- * is a sum of all the BRT entries that have offsets within the region. This
- * creates the entries count array of 16bit numbers for each top-level VDEV.
+ * top-level VDEV into 16MB regions. For each region we maintain a count of
+ * Ordinary BRT entries that have offsets within the region.
+ * This creates the entries count array of 16bit numbers for each top-level
+ * VDEV.
  * The entries count array is always kept in memory and updated on disk in the
  * same transaction group as the BRT updates to keep everything in-sync. We can
  * keep the array in memory, because it is very small. With 16MB regions and
@@ -105,9 +108,9 @@
  * the region size even further in the future). Now, when we want to free
  * a block, we first consult the array. If the counter for the whole region is
  * zero, there is no need to look for the BRT entry, as there isn't one for
- * sure. If the counter for the region is greater than zero, only then we will
- * do a BRT lookup and if an entry is found we will decrease the reference
- * counter in the BRT entry and in the entry counters array.
+ * sure. Relocated entries are looked up separately in the relocation map.
+ * If an ordinary entry is found, we decrease its reference counter and the
+ * region count.
  *
  * The entry counters array is small, but can potentially be larger for very
  * large VDEVs or smaller regions. In this case we don't want to rewrite entire
@@ -355,7 +358,6 @@ brt_vdev_entcount_inc(brt_vdev_t *brtvd, uint64_t idx)
 
 	entcnt = brt_vdev_entcount_get(brtvd, idx);
 	ASSERT(entcnt < UINT16_MAX);
-
 	brt_vdev_entcount_set(brtvd, idx, entcnt + 1);
 }
 
@@ -368,7 +370,6 @@ brt_vdev_entcount_dec(brt_vdev_t *brtvd, uint64_t idx)
 
 	entcnt = brt_vdev_entcount_get(brtvd, idx);
 	ASSERT(entcnt > 0);
-
 	brt_vdev_entcount_set(brtvd, idx, entcnt - 1);
 }
 
@@ -730,6 +731,7 @@ brt_vdev_addref(spa_t *spa, brt_vdev_t *brtvd, const brt_entry_t *bre,
     uint64_t dsize, uint64_t count)
 {
 	uint64_t idx;
+	boolean_t relocated = brt_reloc_resolve(spa, &bre->bre_bp, NULL);
 
 	ASSERT(brtvd->bv_initiated);
 
@@ -752,14 +754,17 @@ brt_vdev_addref(spa_t *spa, brt_vdev_t *brtvd, const brt_entry_t *bre,
 	ASSERT3U(idx, <, brtvd->bv_size);
 
 	brtvd->bv_totalcount++;
-	brt_vdev_entcount_inc(brtvd, idx);
-	brtvd->bv_entcount_dirty = TRUE;
-	BT_SET(brtvd->bv_bitmap, idx / (BRT_BLOCKSIZE / sizeof (uint16_t)));
+	if (!relocated) {
+		brt_vdev_entcount_inc(brtvd, idx);
+		brtvd->bv_entcount_dirty = TRUE;
+		BT_SET(brtvd->bv_bitmap,
+		    idx / (BRT_BLOCKSIZE / sizeof (uint16_t)));
+	}
 }
 
 static void
 brt_vdev_decref(spa_t *spa, brt_vdev_t *brtvd, const brt_entry_t *bre,
-    uint64_t dsize)
+    uint64_t dsize, boolean_t relocated)
 {
 	uint64_t idx;
 
@@ -779,9 +784,12 @@ brt_vdev_decref(spa_t *spa, brt_vdev_t *brtvd, const brt_entry_t *bre,
 
 	ASSERT(brtvd->bv_totalcount > 0);
 	brtvd->bv_totalcount--;
-	brt_vdev_entcount_dec(brtvd, idx);
-	brtvd->bv_entcount_dirty = TRUE;
-	BT_SET(brtvd->bv_bitmap, idx / (BRT_BLOCKSIZE / sizeof (uint16_t)));
+	if (!relocated) {
+		brt_vdev_entcount_dec(brtvd, idx);
+		brtvd->bv_entcount_dirty = TRUE;
+		BT_SET(brtvd->bv_bitmap,
+		    idx / (BRT_BLOCKSIZE / sizeof (uint16_t)));
+	}
 }
 
 static void
@@ -877,10 +885,623 @@ brt_has_endian_fixed(spa_t *spa)
 	return (spa_feature_is_active(spa, SPA_FEATURE_BLOCK_CLONING_ENDIAN));
 }
 
+/* DVA offsets are aligned to SPA_MINBLOCKSIZE. */
+#define	BRT_RELOC_EXTRA		(1ULL << 0)
+#define	BRT_RELOC_QUEUED	(1ULL << 1)
+#define	BRT_RELOC_RETIRING	(1ULL << 2)
+#define	BRT_RELOC_FLAGS		(BRT_RELOC_EXTRA | BRT_RELOC_QUEUED | \
+	BRT_RELOC_RETIRING)
+
+typedef struct brt_reloc_key {
+	uint64_t	brk_vdev;
+	uint64_t	brk_offset;
+	uint64_t	brk_birth;
+} brt_reloc_key_t;
+
+typedef struct brt_reloc_entry {
+	brt_reloc_key_t	bre_key;
+	dva_t		bre_dva;
+	uint64_t	bre_birth;
+} brt_reloc_entry_t;
+
+typedef struct brt_reloc_multi {
+	brt_reloc_entry_t brm_entry;
+	dva_t		brm_dvas[SPA_DVAS_PER_BP - 1];
+} brt_reloc_multi_t;
+
+typedef struct brt_reloc_retire {
+	brt_reloc_key_t	brr_key;
+	list_node_t	brr_node;
+} brt_reloc_retire_t;
+
+#define	BRT_RELOC_SHARDS	256
+
+typedef struct brt_reloc_shard {
+	kmutex_t	brs_lock;
+	kcondvar_t	brs_cv;
+	list_t		brs_reads;
+	const blkptr_t	*brs_draining;
+	uint64_t	brs_pending;
+} brt_reloc_shard_t;
+
+static int
+brt_reloc_compare(const void *a, const void *b)
+{
+	const brt_reloc_key_t *x = a;
+	const brt_reloc_key_t *y = b;
+	int cmp = TREE_CMP(x->brk_vdev, y->brk_vdev);
+	if (cmp == 0)
+		cmp = TREE_CMP(x->brk_offset & ~BRT_RELOC_FLAGS,
+		    y->brk_offset & ~BRT_RELOC_FLAGS);
+	if (cmp == 0)
+		cmp = TREE_CMP(x->brk_birth, y->brk_birth);
+	return (cmp);
+}
+
+static brt_reloc_key_t
+brt_reloc_key(const blkptr_t *bp)
+{
+	brt_reloc_key_t key = {
+		.brk_vdev = DVA_GET_VDEV(&bp->blk_dva[0]),
+		.brk_offset = DVA_GET_OFFSET(&bp->blk_dva[0]),
+		.brk_birth = BP_GET_PHYSICAL_BIRTH(bp),
+	};
+	return (key);
+}
+
+static brt_reloc_entry_t *
+brt_reloc_find(spa_t *spa, const brt_reloc_key_t *key)
+{
+	brt_reloc_entry_t *entry = zfs_btree_find(&spa->spa_brt_reloc, key,
+	    NULL);
+	if (entry == NULL)
+		entry = zfs_btree_find(&spa->spa_brt_reloc_multi, key, NULL);
+	return (entry);
+}
+
+static int
+brt_reloc_insert(spa_t *spa, const brt_reloc_entry_t *entry, const dva_t *dvas)
+{
+	brt_reloc_multi_t record = { .brm_entry = *entry };
+	zfs_btree_t *tree = &spa->spa_brt_reloc;
+	zfs_btree_t *other = &spa->spa_brt_reloc_multi;
+
+	if (DVA_IS_VALID(&dvas[1])) {
+		record.brm_entry.bre_key.brk_offset |= BRT_RELOC_EXTRA;
+		memcpy(record.brm_dvas, &dvas[1], sizeof (record.brm_dvas));
+		tree = &spa->spa_brt_reloc_multi;
+		other = &spa->spa_brt_reloc;
+	}
+
+	zfs_btree_index_t where;
+	if (zfs_btree_find(tree, &entry->bre_key, &where) != NULL ||
+	    zfs_btree_find(other, &entry->bre_key, NULL) != NULL)
+		return (SET_ERROR(ECKSUM));
+
+	zfs_btree_add_idx_unverified(tree, &record, &where);
+	return (0);
+}
+
+static const dva_t *
+brt_reloc_extra_dvas(const brt_reloc_entry_t *entry)
+{
+	if (!(entry->bre_key.brk_offset & BRT_RELOC_EXTRA))
+		return (NULL);
+	return (((const brt_reloc_multi_t *)entry)->brm_dvas);
+}
+
+static void
+brt_reloc_get_dvas(const brt_reloc_entry_t *entry, dva_t *dvas)
+{
+	dvas[0] = entry->bre_dva;
+	const dva_t *extra = brt_reloc_extra_dvas(entry);
+	size_t len = sizeof (dva_t) * (SPA_DVAS_PER_BP - 1);
+	if (extra != NULL)
+		memcpy(&dvas[1], extra, len);
+	else
+		memset(&dvas[1], 0, len);
+}
+
+static void
+brt_reloc_apply(const brt_reloc_entry_t *entry, const blkptr_t *bp,
+    blkptr_t *physical)
+{
+	*physical = *bp;
+	physical->blk_dva[0] = entry->bre_dva;
+	if (BP_GET_NDVAS(bp) > 1) {
+		const dva_t *extra = brt_reloc_extra_dvas(entry);
+		for (int i = 1; extra != NULL && i < BP_GET_NDVAS(bp); i++) {
+			if (DVA_IS_VALID(&extra[i - 1]))
+				physical->blk_dva[i] = extra[i - 1];
+		}
+	}
+	BP_SET_BIRTH(physical, BP_GET_LOGICAL_BIRTH(bp), entry->bre_birth);
+}
+
+boolean_t
+brt_reloc_eligible(const blkptr_t *bp)
+{
+	return (bp != NULL &&
+	    (BP_IS_METADATA(bp) ||
+	    BP_GET_TYPE(bp) == DMU_OT_PLAIN_FILE_CONTENTS ||
+	    BP_GET_TYPE(bp) == DMU_OT_ZVOL ||
+	    BP_GET_TYPE(bp) == DMU_OT_DEDUP) &&
+	    !BP_IS_EMBEDDED(bp) && !BP_IS_HOLE(bp) &&
+	    !BP_SHOULD_BYTESWAP(bp) &&
+	    !BP_GET_REWRITE(bp) &&
+	    BP_COUNT_GANG(bp) == 0);
+}
+
+static brt_reloc_shard_t *
+brt_reloc_shard(spa_t *spa, const blkptr_t *bp)
+{
+	const dva_t *dva = &bp->blk_dva[0];
+	uint64_t hash = cityhash4(DVA_GET_VDEV(dva), DVA_GET_OFFSET(dva),
+	    BP_GET_PHYSICAL_BIRTH(bp), 0);
+
+	return (&spa->spa_brt_reloc_io[hash & (BRT_RELOC_SHARDS - 1)]);
+}
+
+static boolean_t
+brt_reloc_same_placement(const blkptr_t *a, const blkptr_t *b)
+{
+	return (DVA_GET_VDEV(&a->blk_dva[0]) == DVA_GET_VDEV(&b->blk_dva[0]) &&
+	    DVA_GET_OFFSET(&a->blk_dva[0]) == DVA_GET_OFFSET(&b->blk_dva[0]) &&
+	    BP_GET_PHYSICAL_BIRTH(a) == BP_GET_PHYSICAL_BIRTH(b));
+}
+
+/*
+ * A read chooses and pins its physical placement while holding the map
+ * lock. Even unmapped special-vdev reads participate: a move might
+ * publish the first entry after one of them has reached the device.
+ */
+int
+brt_reloc_read_start(zio_t *zio)
+{
+	spa_t *spa = zio->io_spa;
+	const blkptr_t *bp = zio->io_bp;
+
+	if (spa->spa_brt_reloc_io == NULL || bp == NULL ||
+	    BP_IS_EMBEDDED(bp) || BP_IS_HOLE(bp) ||
+	    !spa_feature_is_enabled(spa, SPA_FEATURE_BRT_RELOCATION))
+		return (0);
+
+	vdev_t *vd = vdev_lookup_top(spa, DVA_GET_VDEV(&bp->blk_dva[0]));
+	boolean_t special = vd != NULL && vd->vdev_mg != NULL &&
+	    vd->vdev_mg->mg_class == spa_special_class(spa);
+	boolean_t indirect = vd != NULL && vd->vdev_ops == &vdev_indirect_ops;
+	boolean_t scan = (zio->io_flags & ZIO_FLAG_SCAN_THREAD) != 0;
+	if (!special && ((!indirect && !scan) ||
+	    atomic_load_64(&spa->spa_brt_reloc_count) == 0))
+		return (0);
+
+	ASSERT3P(bp, ==, &zio->io_bp_copy);
+	ASSERT0P(zio->io_brt_shard);
+	rw_enter(&spa->spa_brt_reloc_lock, RW_READER);
+	/* Removal preserves the original vdev ID in the indirect vdev. */
+	if ((special || indirect) &&
+	    atomic_load_64(&spa->spa_brt_reloc_count) != 0) {
+		brt_reloc_key_t key = brt_reloc_key(bp);
+		brt_reloc_entry_t *entry = brt_reloc_find(spa, &key);
+		if (entry != NULL) {
+			if (entry->bre_key.brk_offset & BRT_RELOC_RETIRING) {
+				rw_exit(&spa->spa_brt_reloc_lock);
+				return (SET_ERROR(ENOENT));
+			}
+			brt_reloc_apply(entry, bp, &zio->io_bp_copy);
+			zio->io_brt_resolved = B_TRUE;
+			zio->io_txg = BP_GET_PHYSICAL_BIRTH(bp);
+		}
+	}
+
+	if (!special && !scan && !zio->io_brt_resolved) {
+		rw_exit(&spa->spa_brt_reloc_lock);
+		return (0);
+	}
+
+	/*
+	 * Sorted scans already carry the resolved DVA. Scan I/O is joined
+	 * in the sync thread before the placement can be retired.
+	 */
+	brt_reloc_shard_t *shard = brt_reloc_shard(spa, bp);
+	mutex_enter(&shard->brs_lock);
+	list_insert_tail(&shard->brs_reads, zio);
+	zio->io_brt_shard = shard;
+	mutex_exit(&shard->brs_lock);
+	rw_exit(&spa->spa_brt_reloc_lock);
+	return (0);
+}
+
+void
+brt_reloc_read_done(zio_t *zio)
+{
+	brt_reloc_shard_t *shard = zio->io_brt_shard;
+	if (shard == NULL)
+		return;
+
+	mutex_enter(&shard->brs_lock);
+	list_remove(&shard->brs_reads, zio);
+	zio->io_brt_shard = NULL;
+	if (shard->brs_draining != NULL &&
+	    brt_reloc_same_placement(zio->io_bp, shard->brs_draining)) {
+		ASSERT3U(shard->brs_pending, >, 0);
+		if (--shard->brs_pending == 0)
+			cv_signal(&shard->brs_cv);
+	}
+	mutex_exit(&shard->brs_lock);
+}
+
+/*
+ * The sync thread calls this after closing the old placement to new
+ * readers. Reads in the same shard can continue to issue and complete.
+ */
+static void
+brt_reloc_wait(spa_t *spa, const blkptr_t *bp)
+{
+	brt_reloc_shard_t *shard = brt_reloc_shard(spa, bp);
+	mutex_enter(&shard->brs_lock);
+	ASSERT0P(shard->brs_draining);
+	ASSERT0(shard->brs_pending);
+	shard->brs_draining = bp;
+	for (zio_t *zio = list_head(&shard->brs_reads); zio != NULL;
+	    zio = list_next(&shard->brs_reads, zio)) {
+		if (brt_reloc_same_placement(zio->io_bp, bp))
+			shard->brs_pending++;
+	}
+	while (shard->brs_pending != 0)
+		cv_wait(&shard->brs_cv, &shard->brs_lock);
+	shard->brs_draining = NULL;
+	mutex_exit(&shard->brs_lock);
+}
+
+boolean_t
+brt_reloc_resolve(spa_t *spa, const blkptr_t *bp, blkptr_t *physical)
+{
+	if (likely(atomic_load_64(&spa->spa_brt_reloc_count) == 0) ||
+	    bp == NULL || BP_IS_EMBEDDED(bp) || BP_IS_HOLE(bp))
+		return (B_FALSE);
+
+	brt_reloc_key_t key = brt_reloc_key(bp);
+	rw_enter(&spa->spa_brt_reloc_lock, RW_READER);
+	brt_reloc_entry_t *entry = brt_reloc_find(spa, &key);
+	if (entry != NULL && physical != NULL)
+		brt_reloc_apply(entry, bp, physical);
+	rw_exit(&spa->spa_brt_reloc_lock);
+	return (entry != NULL);
+}
+
+boolean_t
+brt_reloc_retire(spa_t *spa, const blkptr_t *bp)
+{
+	if (likely(atomic_load_64(&spa->spa_brt_reloc_count) == 0))
+		return (B_FALSE);
+
+	brt_reloc_key_t key = brt_reloc_key(bp);
+	rw_enter(&spa->spa_brt_reloc_lock, RW_WRITER);
+	brt_reloc_entry_t *entry = brt_reloc_find(spa, &key);
+	boolean_t found = entry != NULL;
+	if (found && !(entry->bre_key.brk_offset & BRT_RELOC_QUEUED)) {
+		entry->bre_key.brk_offset |= BRT_RELOC_QUEUED;
+		/* Flat DDT entries may gain DVAs after a move. */
+		if (BP_GET_NDVAS(bp) > 1) {
+			dva_t dvas[SPA_DVAS_PER_BP];
+			brt_reloc_get_dvas(entry, dvas);
+			for (int i = 1; i < BP_GET_NDVAS(bp); i++) {
+				if (!DVA_IS_VALID(&dvas[i]))
+					dvas[i] = bp->blk_dva[i];
+			}
+			if (entry->bre_key.brk_offset & BRT_RELOC_EXTRA) {
+				brt_reloc_multi_t *record =
+				    (brt_reloc_multi_t *)entry;
+				memcpy(record->brm_dvas, &dvas[1],
+				    sizeof (record->brm_dvas));
+			} else if (DVA_IS_VALID(&dvas[1])) {
+				brt_reloc_entry_t copy = *entry;
+				zfs_btree_remove(&spa->spa_brt_reloc, &key);
+				VERIFY0(brt_reloc_insert(spa, &copy, dvas));
+				zfs_btree_verify(&spa->spa_brt_reloc_multi);
+			}
+		}
+		brt_reloc_retire_t *retire = kmem_alloc(sizeof (*retire),
+		    KM_SLEEP);
+		retire->brr_key = key;
+		list_link_init(&retire->brr_node);
+		list_insert_tail(&spa->spa_brt_retire, retire);
+	}
+	rw_exit(&spa->spa_brt_reloc_lock);
+	return (found);
+}
+
+static int brt_entry_refcount(spa_t *, const blkptr_t *, uint64_t *);
+
+static void
+brt_reloc_map_create(spa_t *spa, dmu_tx_t *tx)
+{
+	ASSERT0(spa->spa_brt_reloc_obj);
+	rw_enter(&spa->spa_brt_reloc_obj_lock, RW_WRITER);
+	spa->spa_brt_reloc_obj = zap_create_flags(spa->spa_meta_objset, 0,
+	    ZAP_FLAG_HASH64 | ZAP_FLAG_UINT64_KEY, DMU_OTN_ZAP_METADATA,
+	    brt_zap_default_bs, brt_zap_default_ibs, DMU_OT_NONE, 0, tx);
+	VERIFY3U(spa->spa_brt_reloc_obj, !=, 0);
+	VERIFY0(zap_add(spa->spa_meta_objset, DMU_POOL_DIRECTORY_OBJECT,
+	    BRT_RELOC_MAP_NAME, sizeof (uint64_t), 1,
+	    &spa->spa_brt_reloc_obj, tx));
+	rw_exit(&spa->spa_brt_reloc_obj_lock);
+}
+
+static void
+brt_reloc_map_ensure(spa_t *spa, dmu_tx_t *tx)
+{
+	if (spa->spa_brt_reloc_obj == 0)
+		brt_reloc_map_create(spa, tx);
+}
+
+static void
+brt_reloc_map_destroy(spa_t *spa, dmu_tx_t *tx)
+{
+	ASSERT0(spa->spa_brt_reloc_count);
+	uint64_t object = spa->spa_brt_reloc_obj;
+	VERIFY3U(object, !=, 0);
+	rw_enter(&spa->spa_brt_reloc_obj_lock, RW_WRITER);
+	VERIFY0(zap_remove(spa->spa_meta_objset, DMU_POOL_DIRECTORY_OBJECT,
+	    BRT_RELOC_MAP_NAME, tx));
+	VERIFY0(zap_destroy(spa->spa_meta_objset, object, tx));
+	spa->spa_brt_reloc_obj = 0;
+	rw_exit(&spa->spa_brt_reloc_obj_lock);
+}
+
+static void
+brt_reloc_zap_key(const brt_reloc_key_t *key,
+    uint64_t words[BRT_RELOC_KEY_WORDS])
+{
+	words[0] = key->brk_vdev;
+	words[1] = key->brk_offset & ~BRT_RELOC_FLAGS;
+	words[2] = key->brk_birth;
+}
+
+static void
+brt_reloc_map_remove(spa_t *spa, const brt_reloc_key_t *key, dmu_tx_t *tx)
+{
+	uint64_t words[BRT_RELOC_KEY_WORDS];
+	brt_reloc_zap_key(key, words);
+	VERIFY0(zap_remove_uint64(spa->spa_meta_objset,
+	    spa->spa_brt_reloc_obj, words, BRT_RELOC_KEY_WORDS, tx));
+}
+
+static int
+brt_reloc_store(spa_t *spa, const brt_reloc_entry_t *entry, const dva_t *dvas,
+    uint64_t refs, boolean_t add, dmu_tx_t *tx)
+{
+	uint64_t key[BRT_RELOC_KEY_WORDS];
+	brt_reloc_zap_key(&entry->bre_key, key);
+	uint64_t value[BRT_RELOC_WORDS] = { refs,
+	    dvas[0].dva_word[0], dvas[0].dva_word[1], entry->bre_birth,
+	    dvas[1].dva_word[0], dvas[1].dva_word[1],
+	    dvas[2].dva_word[0], dvas[2].dva_word[1] };
+	if (add) {
+		return (zap_add_uint64(spa->spa_meta_objset,
+		    spa->spa_brt_reloc_obj, key, BRT_RELOC_KEY_WORDS,
+		    sizeof (uint64_t), BRT_RELOC_WORDS, value, tx));
+	}
+	return (zap_update_uint64(spa->spa_meta_objset,
+	    spa->spa_brt_reloc_obj, key, BRT_RELOC_KEY_WORDS,
+	    sizeof (uint64_t), BRT_RELOC_WORDS, value, tx));
+}
+
+int
+brt_relocate(spa_t *spa, const blkptr_t *source, const blkptr_t *dest,
+    dmu_tx_t *tx)
+{
+	ASSERT(dmu_tx_is_syncing(tx));
+
+	if (brt_reloc_resolve(spa, source, NULL))
+		return (SET_ERROR(EALREADY));
+	if (atomic_load_64(&spa->spa_brt_reloc_count) == 0) {
+		spa_config_enter(spa, SCL_ZIO, FTAG, RW_WRITER);
+		spa_config_exit(spa, SCL_ZIO, FTAG);
+	}
+
+	brt_reloc_entry_t entry = {
+		.bre_key = brt_reloc_key(source),
+		.bre_dva = dest->blk_dva[0],
+		.bre_birth = BP_GET_PHYSICAL_BIRTH(dest),
+	};
+	dva_t dvas[SPA_DVAS_PER_BP] = { 0 };
+	for (int i = 0; i < BP_GET_NDVAS(dest); i++)
+		dvas[i] = dest->blk_dva[i];
+
+	brt_vdev_t *brtvd = brt_vdev(spa, entry.bre_key.brk_vdev, B_TRUE);
+	if (!brtvd->bv_initiated) {
+		rw_enter(&brtvd->bv_lock, RW_WRITER);
+		brt_vdev_realloc(spa, brtvd);
+		rw_exit(&brtvd->bv_lock);
+	}
+	uint64_t refs;
+	int error = brt_entry_refcount(spa, source, &refs);
+	if (error == 0 && brtvd->bv_mos_entries == 0) {
+		brt_vdev_create(spa, brtvd, tx);
+		brtvd->bv_meta_dirty = B_TRUE;
+	}
+	if (error == 0)
+		brt_reloc_map_ensure(spa, tx);
+	if (error == 0) {
+		error = brt_reloc_store(spa, &entry, dvas, refs, B_TRUE, tx);
+	}
+	if (error != 0) {
+		if (spa->spa_brt_reloc_count == 0 &&
+		    spa->spa_brt_reloc_obj != 0)
+			brt_reloc_map_destroy(spa, tx);
+		return (error);
+	}
+
+	if (brtvd->bv_mos_entries != 0) {
+		error = zap_remove_uint64_by_dnode(brtvd->bv_mos_entries_dnode,
+		    &entry.bre_key.brk_offset, BRT_KEY_WORDS, tx);
+		VERIFY(error == 0 || error == ENOENT);
+	}
+	if (atomic_load_64(&spa->spa_brt_reloc_count) == 0)
+		spa_feature_incr(spa, SPA_FEATURE_BRT_RELOCATION, tx);
+	brtvd->bv_reloc_count++;
+
+	rw_enter(&spa->spa_brt_reloc_lock, RW_WRITER);
+	VERIFY0(brt_reloc_insert(spa, &entry, dvas));
+	zfs_btree_verify(&spa->spa_brt_reloc);
+	zfs_btree_verify(&spa->spa_brt_reloc_multi);
+	atomic_inc_64(&spa->spa_brt_reloc_count);
+	rw_exit(&spa->spa_brt_reloc_lock);
+
+	if (refs > 0) {
+		uint64_t idx = DVA_GET_OFFSET(&source->blk_dva[0]) /
+		    spa->spa_brt_rangesize;
+		ASSERT3U(idx, <, brtvd->bv_size);
+		rw_enter(&brtvd->bv_lock, RW_WRITER);
+		brt_vdev_entcount_dec(brtvd, idx);
+		brtvd->bv_meta_dirty = TRUE;
+		brtvd->bv_entcount_dirty = TRUE;
+		BT_SET(brtvd->bv_bitmap,
+		    idx / (BRT_BLOCKSIZE / sizeof (uint16_t)));
+		rw_exit(&brtvd->bv_lock);
+	}
+
+	brt_reloc_wait(spa, source);
+	metaslab_free(spa, source, dmu_tx_get_txg(tx), B_FALSE);
+	return (0);
+}
+
+static void
+brt_reloc_sync(spa_t *spa, dmu_tx_t *tx)
+{
+	for (;;) {
+		rw_enter(&spa->spa_brt_reloc_lock, RW_WRITER);
+		brt_reloc_retire_t *retire = list_remove_head(
+		    &spa->spa_brt_retire);
+		if (retire == NULL) {
+			rw_exit(&spa->spa_brt_reloc_lock);
+			break;
+		}
+		brt_reloc_key_t key = retire->brr_key;
+		brt_reloc_entry_t *entry = brt_reloc_find(spa, &key);
+		VERIFY3P(entry, !=, NULL);
+		entry->bre_key.brk_offset |= BRT_RELOC_RETIRING;
+		boolean_t extra = (entry->bre_key.brk_offset & BRT_RELOC_EXTRA)
+		    != 0;
+
+		blkptr_t physical = { 0 };
+		brt_reloc_get_dvas(entry, physical.blk_dva);
+		BP_SET_BIRTH(&physical, entry->bre_birth, 0);
+		rw_exit(&spa->spa_brt_reloc_lock);
+		kmem_free(retire, sizeof (*retire));
+
+		brt_vdev_t *brtvd = brt_vdev(spa, key.brk_vdev, B_FALSE);
+		brt_reloc_map_remove(spa, &key, tx);
+		brt_reloc_wait(spa, &physical);
+
+		rw_enter(&spa->spa_brt_reloc_lock, RW_WRITER);
+		zfs_btree_remove(extra ? &spa->spa_brt_reloc_multi :
+		    &spa->spa_brt_reloc, &key);
+		atomic_dec_64(&spa->spa_brt_reloc_count);
+		rw_exit(&spa->spa_brt_reloc_lock);
+
+		metaslab_free(spa, &physical, dmu_tx_get_txg(tx), B_FALSE);
+
+		if (--brtvd->bv_reloc_count == 0 && brtvd->bv_totalcount == 0)
+			brt_vdev_destroy(spa, brtvd, tx);
+		if (atomic_load_64(&spa->spa_brt_reloc_count) == 0) {
+			brt_reloc_map_destroy(spa, tx);
+			spa_feature_decr(spa, SPA_FEATURE_BRT_RELOCATION, tx);
+		}
+	}
+}
+
+static int
+brt_reloc_entry_load(spa_t *spa,
+    const uint64_t key[BRT_RELOC_KEY_WORDS],
+    const uint64_t value[BRT_RELOC_WORDS])
+{
+	dva_t physical[SPA_DVAS_PER_BP] = {
+		{ { value[1], value[2] } },
+		{ { value[4], value[5] } },
+		{ { value[6], value[7] } },
+	};
+	if (key[0] >= spa->spa_brt_nvdevs ||
+	    !IS_P2ALIGNED(key[1], SPA_MINBLOCKSIZE) ||
+	    !DVA_IS_VALID(&physical[0]) ||
+	    (DVA_IS_VALID(&physical[2]) && !DVA_IS_VALID(&physical[1])) ||
+	    value[3] <= key[2])
+		return (SET_ERROR(ECKSUM));
+
+	for (int i = 0; i < SPA_DVAS_PER_BP; i++) {
+		if (!DVA_IS_VALID(&physical[i]))
+			continue;
+		if (DVA_GET_GANG(&physical[i]) ||
+		    DVA_GET_VDEV(&physical[i]) >=
+		    spa->spa_root_vdev->vdev_children)
+			return (SET_ERROR(ECKSUM));
+	}
+
+	brt_vdev_t *brtvd = spa->spa_brt_vdevs[key[0]];
+	if (brtvd->bv_mos_entries == 0)
+		return (SET_ERROR(ECKSUM));
+	if (!brtvd->bv_initiated) {
+		rw_enter(&brtvd->bv_lock, RW_WRITER);
+		brt_vdev_realloc(spa, brtvd);
+		rw_exit(&brtvd->bv_lock);
+	}
+	brt_reloc_entry_t entry = {
+		.bre_key = { key[0], key[1], key[2] },
+		.bre_dva = physical[0],
+		.bre_birth = value[3],
+	};
+	int error = brt_reloc_insert(spa, &entry, physical);
+	if (error == 0)
+		brtvd->bv_reloc_count++;
+	return (error);
+}
+
+static int
+brt_reloc_map_load(spa_t *spa)
+{
+	zap_cursor_t zc;
+	uint64_t key[BRT_RELOC_KEY_WORDS];
+	uint64_t value[BRT_RELOC_WORDS];
+	int error;
+
+	for (zap_cursor_init(&zc, spa->spa_meta_objset,
+	    spa->spa_brt_reloc_obj);
+	    (error = zap_cursor_retrieve_uint64(&zc, BRT_RELOC_KEY_WORDS,
+	    key, BRT_RELOC_WORDS, value)) == 0; zap_cursor_advance(&zc)) {
+		error = brt_reloc_entry_load(spa, key, value);
+		if (error != 0)
+			break;
+	}
+	zap_cursor_fini(&zc);
+	if (error != ENOENT)
+		return (error);
+
+	/* zdb can enable a full-tree check. Run it once after loading. */
+	zfs_btree_verify(&spa->spa_brt_reloc);
+	zfs_btree_verify(&spa->spa_brt_reloc_multi);
+	return (0);
+}
+
 static int
 brt_entry_lookup(spa_t *spa, brt_vdev_t *brtvd, brt_entry_t *bre)
 {
 	uint64_t off = BRE_OFFSET(bre);
+
+	if (brtvd->bv_reloc_count != 0 &&
+	    brt_reloc_resolve(spa, &bre->bre_bp, NULL)) {
+		brt_reloc_key_t key = brt_reloc_key(&bre->bre_bp);
+		uint64_t words[BRT_RELOC_KEY_WORDS];
+		uint64_t value[BRT_RELOC_WORDS] = { 0 };
+		brt_reloc_zap_key(&key, words);
+		int error = zap_lookup_uint64(spa->spa_meta_objset,
+		    spa->spa_brt_reloc_obj, words, BRT_RELOC_KEY_WORDS,
+		    sizeof (uint64_t), BRT_RELOC_WORDS, value);
+		if (error == 0)
+			bre->bre_count = value[0];
+		return (error);
+	}
 
 	if (brtvd->bv_mos_entries == 0)
 		return (SET_ERROR(ENOENT));
@@ -904,6 +1525,8 @@ brt_entry_lookup(spa_t *spa, brt_vdev_t *brtvd, brt_entry_t *bre)
 boolean_t
 brt_maybe_exists(spa_t *spa, const blkptr_t *bp)
 {
+	if (brt_reloc_resolve(spa, bp, NULL))
+		return (B_TRUE);
 
 	if (spa->spa_brt_nvdevs == 0)
 		return (B_FALSE);
@@ -1081,6 +1704,7 @@ brt_entry_decref(spa_t *spa, const blkptr_t *bp)
 	avl_index_t where;
 	uint64_t vdevid;
 	int error;
+	boolean_t relocated = brt_reloc_resolve(spa, bp, NULL);
 
 	brt_entry_fill(bp, &bre_search, &vdevid);
 
@@ -1116,6 +1740,15 @@ brt_entry_decref(spa_t *spa, const blkptr_t *bp)
 	}
 
 	BRTSTAT_BUMP(brt_decref_entry_loaded_from_disk);
+	/*
+	 * A persisted relocation can have zero extra references. Its last
+	 * free retires the mapping without changing the BRT counters.
+	 */
+	if (bre_search.bre_count == 0) {
+		rw_exit(&brtvd->bv_lock);
+		BRTSTAT_BUMP(brt_decref_free_data_now);
+		return (B_TRUE);
+	}
 	bre = kmem_cache_alloc(brt_entry_cache, KM_SLEEP);
 	bre->bre_bp = bre_search.bre_bp;
 	bre->bre_count = bre_search.bre_count;
@@ -1136,49 +1769,56 @@ out:
 		BRTSTAT_BUMP(brt_decref_free_data_later);
 	else
 		BRTSTAT_BUMP(brt_decref_entry_still_referenced);
-	brt_vdev_decref(spa, brtvd, bre, bp_get_dsize_sync(spa, bp));
+	brt_vdev_decref(spa, brtvd, bre, bp_get_dsize_sync(spa, bp), relocated);
 
 	rw_exit(&brtvd->bv_lock);
 
 	return (B_FALSE);
 }
 
-uint64_t
-brt_entry_get_refcount(spa_t *spa, const blkptr_t *bp)
+static int
+brt_entry_refcount(spa_t *spa, const blkptr_t *bp, uint64_t *refcnt)
 {
-	brt_entry_t bre_search, *bre;
-	uint64_t vdevid, refcnt;
-	int error;
+	brt_entry_t search;
+	uint64_t vdevid;
 
-	brt_entry_fill(bp, &bre_search, &vdevid);
-
+	brt_entry_fill(bp, &search, &vdevid);
 	brt_vdev_t *brtvd = brt_vdev(spa, vdevid, B_FALSE);
 	ASSERT(brtvd != NULL);
 
 	rw_enter(&brtvd->bv_lock, RW_READER);
 	ASSERT(brtvd->bv_initiated);
-	bre = avl_find(&brtvd->bv_tree, &bre_search, NULL);
-	if (bre == NULL) {
+	brt_entry_t *bre = avl_find(&brtvd->bv_tree, &search, NULL);
+	if (bre != NULL) {
+		*refcnt = bre->bre_count;
 		rw_exit(&brtvd->bv_lock);
-		error = brt_entry_lookup(spa, brtvd, &bre_search);
-		if (error == ENOENT) {
-			refcnt = 0;
-		} else {
-			ASSERT0(error);
-			refcnt = bre_search.bre_count;
-		}
-	} else {
-		refcnt = bre->bre_count;
-		rw_exit(&brtvd->bv_lock);
+		return (0);
 	}
+	rw_exit(&brtvd->bv_lock);
 
+	int error = brt_entry_lookup(spa, brtvd, &search);
+	if (error != 0 && error != ENOENT)
+		return (error);
+
+	*refcnt = search.bre_count;
+	return (0);
+}
+
+uint64_t
+brt_entry_get_refcount(spa_t *spa, const blkptr_t *bp)
+{
+	uint64_t refcnt = 0;
+	int error __maybe_unused = brt_entry_refcount(spa, bp, &refcnt);
+	ASSERT0(error);
 	return (refcnt);
 }
 
 static void
 brt_prefetch(brt_vdev_t *brtvd, const blkptr_t *bp)
 {
-	if (!brt_zap_prefetch || brtvd->bv_mos_entries == 0)
+	if (!brt_zap_prefetch)
+		return;
+	if (brtvd->bv_mos_entries == 0)
 		return;
 
 	uint64_t off = DVA_GET_OFFSET(&bp->blk_dva[0]);
@@ -1196,8 +1836,12 @@ brt_entry_compare(const void *x1, const void *x2)
 	const brt_entry_t *bre1 = x1, *bre2 = x2;
 	const blkptr_t *bp1 = &bre1->bre_bp, *bp2 = &bre2->bre_bp;
 
-	return (TREE_CMP(DVA_GET_OFFSET(&bp1->blk_dva[0]),
-	    DVA_GET_OFFSET(&bp2->blk_dva[0])));
+	int cmp = TREE_CMP(DVA_GET_OFFSET(&bp1->blk_dva[0]),
+	    DVA_GET_OFFSET(&bp2->blk_dva[0]));
+	if (cmp == 0)
+		cmp = TREE_CMP(BP_GET_PHYSICAL_BIRTH(bp1),
+		    BP_GET_PHYSICAL_BIRTH(bp2));
+	return (cmp);
 }
 
 static int
@@ -1224,6 +1868,10 @@ brt_entry_dedup_compare(const void *x1, const void *x2)
 	if (likely(cmp == 0)) {
 		cmp = TREE_CMP(DVA_GET_OFFSET(&bp1->blk_dva[0]),
 		    DVA_GET_OFFSET(&bp2->blk_dva[0]));
+	}
+	if (cmp == 0) {
+		cmp = TREE_CMP(BP_GET_PHYSICAL_BIRTH(bp1),
+		    BP_GET_PHYSICAL_BIRTH(bp2));
 	}
 	return (cmp);
 }
@@ -1369,19 +2017,9 @@ brt_pending_apply_vdev(void *arg)
 		 */
 		uint64_t off = BRE_OFFSET(bre);
 		if (brtvd->bv_mos_entries != 0 &&
-		    brt_vdev_lookup(spa, brtvd, off)) {
-			int error;
-			if (brt_has_endian_fixed(spa)) {
-				error = zap_lookup_uint64_by_dnode(
-				    brtvd->bv_mos_entries_dnode, &off,
-				    BRT_KEY_WORDS, sizeof (bre->bre_count), 1,
-				    &bre->bre_count);
-			} else {
-				error = zap_lookup_uint64_by_dnode(
-				    brtvd->bv_mos_entries_dnode, &off,
-				    BRT_KEY_WORDS, 1, sizeof (bre->bre_count),
-				    &bre->bre_count);
-			}
+		    (brt_vdev_lookup(spa, brtvd, off) ||
+		    brt_reloc_resolve(spa, &bre->bre_bp, NULL))) {
+			int error = brt_entry_lookup(spa, brtvd, bre);
 			if (error == 0) {
 				BRTSTAT_BUMP(brt_addref_entry_on_disk);
 			} else {
@@ -1527,6 +2165,23 @@ brt_sync_entry(spa_t *spa, dnode_t *dn, brt_entry_t *bre, dmu_tx_t *tx)
 {
 	uint64_t off = BRE_OFFSET(bre);
 
+	if (bre->bre_pcount != 0 &&
+	    atomic_load_64(&spa->spa_brt_reloc_count) != 0) {
+		brt_reloc_key_t key = brt_reloc_key(&bre->bre_bp);
+		rw_enter(&spa->spa_brt_reloc_lock, RW_READER);
+		brt_reloc_entry_t *entry = brt_reloc_find(spa, &key);
+		if (entry != NULL) {
+			brt_reloc_entry_t copy = *entry;
+			dva_t dvas[SPA_DVAS_PER_BP];
+			brt_reloc_get_dvas(entry, dvas);
+			rw_exit(&spa->spa_brt_reloc_lock);
+			VERIFY0(brt_reloc_store(spa, &copy, dvas,
+			    bre->bre_count, B_FALSE, tx));
+			return;
+		}
+		rw_exit(&spa->spa_brt_reloc_lock);
+	}
+
 	if (bre->bre_pcount == 0) {
 		/* The net change is zero, nothing to do in ZAP. */
 	} else if (bre->bre_count == 0) {
@@ -1563,9 +2218,6 @@ brt_sync_table(spa_t *spa, dmu_tx_t *tx)
 			continue;
 		}
 
-		ASSERT(!brtvd->bv_entcount_dirty ||
-		    avl_numnodes(&brtvd->bv_tree) != 0);
-
 		if (brtvd->bv_mos_brtvdev == 0)
 			brt_vdev_create(spa, brtvd, tx);
 
@@ -1580,7 +2232,7 @@ brt_sync_table(spa_t *spa, dmu_tx_t *tx)
 		if (zfs_flags & ZFS_DEBUG_BRT)
 			brt_vdev_dump(brtvd);
 #endif
-		if (brtvd->bv_totalcount == 0)
+		if (brtvd->bv_totalcount == 0 && brtvd->bv_reloc_count == 0)
 			brt_vdev_destroy(spa, brtvd, tx);
 		else
 			brt_vdev_sync(spa, brtvd, tx);
@@ -1602,7 +2254,8 @@ brt_sync(spa_t *spa, uint64_t txg)
 		if (spa->spa_brt_vdevs[vdevid]->bv_meta_dirty)
 			break;
 	}
-	if (vdevid >= spa->spa_brt_nvdevs) {
+	if (vdevid >= spa->spa_brt_nvdevs &&
+	    list_is_empty(&spa->spa_brt_retire)) {
 		brt_unlock(spa);
 		return;
 	}
@@ -1610,6 +2263,7 @@ brt_sync(spa_t *spa, uint64_t txg)
 
 	tx = dmu_tx_create_assigned(spa->spa_dsl_pool, txg);
 	brt_sync_table(spa, tx);
+	brt_reloc_sync(spa, tx);
 	dmu_tx_commit(tx);
 }
 
@@ -1617,9 +2271,27 @@ static void
 brt_alloc(spa_t *spa)
 {
 	rw_init(&spa->spa_brt_lock, NULL, RW_DEFAULT, NULL);
+	rw_init(&spa->spa_brt_reloc_lock, NULL, RW_DEFAULT, NULL);
+	zfs_btree_create(&spa->spa_brt_reloc, brt_reloc_compare, NULL,
+	    sizeof (brt_reloc_entry_t));
+	zfs_btree_create(&spa->spa_brt_reloc_multi, brt_reloc_compare, NULL,
+	    sizeof (brt_reloc_multi_t));
+	rw_init(&spa->spa_brt_reloc_obj_lock, NULL, RW_DEFAULT, NULL);
+	list_create(&spa->spa_brt_retire, sizeof (brt_reloc_retire_t),
+	    offsetof(brt_reloc_retire_t, brr_node));
+	spa->spa_brt_reloc_io = kmem_zalloc(BRT_RELOC_SHARDS *
+	    sizeof (brt_reloc_shard_t), KM_SLEEP);
+	for (int i = 0; i < BRT_RELOC_SHARDS; i++) {
+		brt_reloc_shard_t *shard = &spa->spa_brt_reloc_io[i];
+		mutex_init(&shard->brs_lock, NULL, MUTEX_DEFAULT, NULL);
+		cv_init(&shard->brs_cv, NULL, CV_DEFAULT, NULL);
+		list_create(&shard->brs_reads, sizeof (zio_t),
+		    offsetof(zio_t, io_brt_node));
+	}
 	spa->spa_brt_vdevs = NULL;
 	spa->spa_brt_nvdevs = 0;
 	spa->spa_brt_rangesize = 0;
+	spa->spa_brt_reloc_obj = 0;
 
 	spa->spa_brt_dedup = kmem_zalloc(sizeof (brt_dedup_shard_t) *
 	    BRT_DEDUP_SHARDS, KM_SLEEP);
@@ -1645,11 +2317,22 @@ int
 brt_load(spa_t *spa)
 {
 	int error = 0;
+	boolean_t reloc_active =
+	    spa_feature_is_active(spa, SPA_FEATURE_BRT_RELOCATION);
 
 	brt_alloc(spa);
 	brt_wlock(spa);
-	for (uint64_t vdevid = 0; vdevid < spa->spa_root_vdev->vdev_children;
-	    vdevid++) {
+	if (reloc_active) {
+		error = zap_lookup(spa->spa_meta_objset,
+		    DMU_POOL_DIRECTORY_OBJECT, BRT_RELOC_MAP_NAME,
+		    sizeof (uint64_t), 1, &spa->spa_brt_reloc_obj);
+		if (error == ENOENT) {
+			spa->spa_brt_reloc_obj = 0;
+			error = 0;
+		}
+	}
+	for (uint64_t vdevid = 0; error == 0 &&
+	    vdevid < spa->spa_root_vdev->vdev_children; vdevid++) {
 		char name[64];
 		uint64_t mos_brtvdev;
 
@@ -1676,10 +2359,28 @@ brt_load(spa_t *spa)
 		if (error != 0)
 			break;
 	}
+	if (error == 0 && reloc_active) {
+		if (spa->spa_brt_reloc_obj != 0) {
+			if (spa->spa_brt_nvdevs <
+			    spa->spa_root_vdev->vdev_children) {
+				brt_vdevs_expand(spa,
+				    spa->spa_root_vdev->vdev_children);
+			}
+			error = brt_reloc_map_load(spa);
+		} else {
+			error = SET_ERROR(ECKSUM);
+		}
+	}
 
+	uint64_t reloc_count = zfs_btree_numnodes(&spa->spa_brt_reloc) +
+	    zfs_btree_numnodes(&spa->spa_brt_reloc_multi);
+	if (error == 0 && reloc_active && reloc_count == 0)
+		error = SET_ERROR(ECKSUM);
 	if (spa->spa_brt_rangesize == 0)
 		spa->spa_brt_rangesize = BRT_RANGESIZE;
 	brt_unlock(spa);
+	if (error == 0)
+		atomic_add_64(&spa->spa_brt_reloc_count, reloc_count);
 	return (error);
 }
 
@@ -1691,6 +2392,11 @@ brt_prefetch_all(spa_t *spa)
 	 * a prefetch on all such blocks. For the same reason that brt_prefetch
 	 * (called from brt_pending_add) isn't locked, this is also not locked.
 	 */
+	rw_enter(&spa->spa_brt_reloc_obj_lock, RW_READER);
+	if (spa->spa_brt_reloc_obj != 0)
+		(void) zap_prefetch_object(spa->spa_meta_objset,
+		    spa->spa_brt_reloc_obj);
+	rw_exit(&spa->spa_brt_reloc_obj_lock);
 	brt_rlock(spa);
 	for (uint64_t vdevid = 0; vdevid < spa->spa_brt_nvdevs; vdevid++) {
 		brt_vdev_t *brtvd = spa->spa_brt_vdevs[vdevid];
@@ -1713,6 +2419,28 @@ brt_unload(spa_t *spa)
 {
 	if (spa->spa_brt_rangesize == 0)
 		return;
+	atomic_swap_64(&spa->spa_brt_reloc_count, 0);
+	zfs_btree_clear(&spa->spa_brt_reloc);
+	zfs_btree_destroy(&spa->spa_brt_reloc);
+	zfs_btree_clear(&spa->spa_brt_reloc_multi);
+	zfs_btree_destroy(&spa->spa_brt_reloc_multi);
+	brt_reloc_retire_t *retire;
+	while ((retire = list_remove_head(&spa->spa_brt_retire)) != NULL)
+		kmem_free(retire, sizeof (*retire));
+	list_destroy(&spa->spa_brt_retire);
+	rw_destroy(&spa->spa_brt_reloc_obj_lock);
+	rw_destroy(&spa->spa_brt_reloc_lock);
+	for (int i = 0; i < BRT_RELOC_SHARDS; i++) {
+		brt_reloc_shard_t *shard = &spa->spa_brt_reloc_io[i];
+		ASSERT0P(shard->brs_draining);
+		list_destroy(&shard->brs_reads);
+		cv_destroy(&shard->brs_cv);
+		mutex_destroy(&shard->brs_lock);
+	}
+	kmem_free(spa->spa_brt_reloc_io, BRT_RELOC_SHARDS *
+	    sizeof (brt_reloc_shard_t));
+	spa->spa_brt_reloc_io = NULL;
+	spa->spa_brt_reloc_obj = 0;
 	brt_vdevs_free(spa);
 	rw_destroy(&spa->spa_brt_lock);
 	spa->spa_brt_rangesize = 0;

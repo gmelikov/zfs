@@ -1058,6 +1058,7 @@ zio_destroy(zio_t *zio)
 	ASSERT3P(zio->io_batch, ==, NULL);
 	ASSERT3P(zio->io_child_batch, ==, NULL);
 	ASSERT3P(zio->io_exec_next, ==, NULL);
+	ASSERT0P(zio->io_brt_shard);
 	metaslab_trace_fini(ZIO_ALLOC_LIST(zio));
 	list_destroy(&zio->io_parent_list);
 	list_destroy(&zio->io_child_list);
@@ -2099,7 +2100,7 @@ zio_write_compress(zio_t *zio)
 		zio->io_pipeline = zio->io_orig_pipeline;
 
 	} else if ((zio->io_flags & ZIO_FLAG_RAW_ENCRYPT) != 0 &&
-	    zp->zp_type == DMU_OT_DNODE) {
+	    zp->zp_type == DMU_OT_DNODE && zp->zp_level == 0) {
 		/*
 		 * The DMU actually relies on the zio layer's compression
 		 * to free metadnode blocks that have had all contained
@@ -4959,7 +4960,8 @@ zio_dva_free(zio_t *zio)
 	 * queued scan I/O is dropped only once its space is freed here.
 	 */
 	dsl_scan_freed(zio->io_spa, zio->io_bp);
-	metaslab_free(zio->io_spa, zio->io_bp, zio->io_txg, B_FALSE);
+	if (!brt_reloc_retire(zio->io_spa, zio->io_bp))
+		metaslab_free(zio->io_spa, zio->io_bp, zio->io_txg, B_FALSE);
 
 	return (zio);
 }
@@ -5167,6 +5169,16 @@ zio_vdev_io_start(zio_t *zio)
 			else
 				spa_config_enter(spa, SCL_ZIO, zio,
 				    RW_READER);
+		}
+
+		if (zio->io_type == ZIO_TYPE_READ) {
+			zio->io_error = brt_reloc_read_start(zio);
+			if (zio->io_error != 0) {
+				if (!(zio->io_flags & ZIO_FLAG_CONFIG_WRITER))
+					spa_config_exit(spa, SCL_ZIO, zio);
+				zio->io_pipeline = ZIO_INTERLOCK_PIPELINE;
+				return (zio);
+			}
 		}
 
 		/*
@@ -5444,6 +5456,14 @@ zio_vdev_io_assess(zio_t *zio)
 	/* A repair write bypass skips VDEV_IO_DONE entirely. */
 	zio->io_exec_next = zio_batch_leave(zio);
 
+	if (zio->io_brt_shard != NULL)
+		brt_reloc_read_done(zio);
+	if (zio->io_brt_resolved) {
+		zio->io_bp_copy = zio->io_bp_orig;
+		zio->io_txg = BP_GET_PHYSICAL_BIRTH(zio->io_bp);
+		zio->io_brt_resolved = B_FALSE;
+	}
+
 	if (vd == NULL && !(zio->io_flags & ZIO_FLAG_CONFIG_WRITER))
 		spa_config_exit(zio->io_spa, SCL_ZIO, zio);
 
@@ -5594,7 +5614,6 @@ zio_encrypt(zio_t *zio)
 
 	/* if we are doing raw encryption set the provided encryption params */
 	if (zio->io_flags & ZIO_FLAG_RAW_ENCRYPT) {
-		ASSERT0(BP_GET_LEVEL(bp));
 		BP_SET_CRYPT(bp, B_TRUE);
 		BP_SET_BYTEORDER(bp, zp->zp_byteorder);
 		if (ot != DMU_OT_OBJSET)
@@ -5615,7 +5634,7 @@ zio_encrypt(zio_t *zio)
 			zio_push_transform(zio, babd, psize, psize, NULL);
 		}
 
-		if (DMU_OT_IS_ENCRYPTED(ot))
+		if (BP_IS_ENCRYPTED(bp))
 			zio_crypt_encode_params_bp(bp, zp->zp_salt, zp->zp_iv);
 		return (zio);
 	}

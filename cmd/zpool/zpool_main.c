@@ -49,6 +49,7 @@
 #include <sys/wait.h>
 #include <zfs_prop.h>
 #include <sys/fs/zfs.h>
+#include <sys/dsl_bpr.h>
 #include <sys/stat.h>
 #include <sys/systeminfo.h>
 #include <sys/fm/fs/zfs.h>
@@ -61,6 +62,7 @@
 #include <math.h>
 
 #include <libzfs.h>
+#include <libzfs_core.h>
 #include <libzutil.h>
 
 #include "zpool_util.h"
@@ -79,6 +81,7 @@ static int zpool_do_destroy(int, char **);
 
 static int zpool_do_add(int, char **);
 static int zpool_do_remove(int, char **);
+static int zpool_do_relocate(int, char **);
 static int zpool_do_labelclear(int, char **);
 
 static int zpool_do_checkpoint(int, char **);
@@ -162,6 +165,7 @@ typedef enum {
 	HELP_PREFETCH,
 	HELP_REPLACE,
 	HELP_REMOVE,
+	HELP_RELOCATE,
 	HELP_INITIALIZE,
 	HELP_SCRUB,
 	HELP_RESILVER,
@@ -376,6 +380,7 @@ static zpool_command_t command_table[] = {
 	{ "destroy",	zpool_do_destroy,	HELP_DESTROY		},
 	{ NULL },
 	{ "add",	zpool_do_add,		HELP_ADD		},
+	{ "relocate",	zpool_do_relocate,	HELP_RELOCATE	},
 	{ "remove",	zpool_do_remove,	HELP_REMOVE		},
 	{ NULL },
 	{ "labelclear",	zpool_do_labelclear,	HELP_LABELCLEAR		},
@@ -490,6 +495,8 @@ get_usage(zpool_help_t idx)
 	case HELP_REPLACE:
 		return ("\treplace [-fsw] [-o property=value] "
 		    "<pool> <device> [new-device]\n");
+	case HELP_RELOCATE:
+		return ("\trelocate [-b bytes] [-c cursor] <pool> <vdev>\n");
 	case HELP_REMOVE:
 		return ("\tremove [-npsw] <pool> <device> ...\n");
 	case HELP_REOPEN:
@@ -1645,6 +1652,101 @@ zpool_do_add(int argc, char **argv)
 	return (ret);
 }
 
+static boolean_t
+relocate_parse_cursor(const char *s, uint64_t cursor[BPR_BATCH_CURSOR_WORDS])
+{
+	for (uint_t i = 0; i < BPR_BATCH_CURSOR_WORDS; i++) {
+		char *end;
+		char delimiter = i + 1 == BPR_BATCH_CURSOR_WORDS ? '\0' : ':';
+
+		if (*s < '0' || *s > '9')
+			return (B_FALSE);
+		errno = 0;
+		cursor[i] = strtoull(s, &end, 10);
+		if (errno != 0 || *end != delimiter)
+			return (B_FALSE);
+		s = end + 1;
+	}
+	return (B_TRUE);
+}
+
+static int
+zpool_do_relocate(int argc, char **argv)
+{
+	uint64_t bytes = 1 << 20;
+	uint64_t cursor[BPR_BATCH_CURSOR_WORDS];
+	const uint64_t *resume = NULL;
+	int opt;
+
+	while ((opt = getopt(argc, argv, "b:c:")) != -1) {
+		switch (opt) {
+		case 'b':
+			if (zfs_nicestrtonum(g_zfs, optarg, &bytes) != 0)
+				return (2);
+			break;
+		case 'c':
+			if (!relocate_parse_cursor(optarg, cursor)) {
+				(void) fprintf(stderr,
+				    "invalid relocation cursor\n");
+				return (2);
+			}
+			resume = cursor;
+			break;
+		default:
+			usage(B_FALSE);
+		}
+	}
+	if (argc - optind != 2)
+		usage(B_FALSE);
+
+	const char *pool = argv[optind];
+	const char *name = argv[optind + 1];
+	zpool_handle_t *zhp = zpool_open(g_zfs, pool);
+	if (zhp == NULL)
+		return (1);
+
+	nvlist_t *vdev = zpool_find_vdev(zhp, name, NULL, NULL, NULL);
+	if (vdev == NULL) {
+		(void) fprintf(stderr, "no such vdev '%s'\n", name);
+		zpool_close(zhp);
+		return (1);
+	}
+
+	uint64_t guid = fnvlist_lookup_uint64(vdev, ZPOOL_CONFIG_GUID);
+	nvlist_t *out = NULL;
+	int error = lzc_brt_relocate(pool, guid, bytes, resume,
+	    ARRAY_SIZE(cursor), &out);
+	zpool_close(zhp);
+	if (error == 0) {
+		uint64_t *values;
+		uint_t count;
+		if (nvlist_lookup_uint64_array(out, "cursor", &values,
+		    &count) != 0 || count != ARRAY_SIZE(cursor)) {
+			error = EIO;
+		} else {
+			error = fnvlist_lookup_int32(out, "error");
+			(void) printf("blocks=%" PRIu64 " bytes=%" PRIu64
+			    " skipped=%" PRIu64 " visited=%" PRIu64
+			    " done=%u error=%d cursor=",
+			    fnvlist_lookup_uint64(out, "blocks"),
+			    fnvlist_lookup_uint64(out, "bytes"),
+			    fnvlist_lookup_uint64(out, "skipped"),
+			    fnvlist_lookup_uint64(out, "visited"),
+			    (uint_t)fnvlist_lookup_boolean_value(out, "done"),
+			    error);
+			for (uint_t i = 0; i < count; i++)
+				(void) printf("%s%" PRIu64,
+				    i == 0 ? "" : ":", values[i]);
+			(void) putchar('\n');
+		}
+	}
+	nvlist_free(out);
+	if (error != 0)
+		(void) fprintf(stderr, "cannot relocate '%s': %s\n",
+		    name, strerror(error));
+	return (error != 0);
+}
+
 /*
  * zpool remove [-npsw] <pool> <vdev> ...
  *
@@ -2286,6 +2388,7 @@ zpool_do_create(int argc, char **argv)
 			} else if (
 			    enable_pool_features &&
 			    feat->fi_zfs_mod_supported &&
+			    !(feat->fi_flags & ZFEATURE_FLAG_NO_CREATE) &&
 			    requested_features[i]) {
 				ret = add_prop_list(propname,
 				    ZFS_FEATURE_ENABLED, &props, B_TRUE);

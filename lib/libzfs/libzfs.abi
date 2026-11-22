@@ -584,7 +584,7 @@
     <elf-symbol name='fletcher_4_superscalar4_ops' size='128' type='object-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='fletcher_4_superscalar_ops' size='128' type='object-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='libzfs_config_ops' size='16' type='object-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='spa_feature_table' size='2744' type='object-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='spa_feature_table' size='2800' type='object-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='zfeature_checks_disable' size='4' type='object-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='zfs_deleg_perm_tab' size='560' type='object-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='zfs_history_event_names' size='328' type='object-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
@@ -6554,7 +6554,8 @@
       <enumerator name='SPA_FEATURE_PHYSICAL_REWRITE' value='46'/>
       <enumerator name='SPA_FEATURE_DRAID_FAIL_DOMAINS' value='47'/>
       <enumerator name='SPA_FEATURE_ANYRAID' value='48'/>
-      <enumerator name='SPA_FEATURES' value='49'/>
+      <enumerator name='SPA_FEATURE_BRT_RELOCATION' value='49'/>
+      <enumerator name='SPA_FEATURES' value='50'/>
     </enum-decl>
     <typedef-decl name='spa_feature_t' type-id='33ecb627' id='d6618c78'/>
     <qualified-type-def type-id='80f4b756' const='yes' id='b99c00c9'/>
@@ -10094,8 +10095,8 @@
     </function-decl>
   </abi-instr>
   <abi-instr address-size='64' path='module/zcommon/zfeature_common.c' language='LANG_C99'>
-    <array-type-def dimensions='1' type-id='83f29ca2' size-in-bits='21952' id='f92b2a1c'>
-      <subrange length='49' type-id='7359adad' id='8b6f62cc'/>
+    <array-type-def dimensions='1' type-id='83f29ca2' size-in-bits='22400' id='f92b2a1c'>
+      <subrange length='50' type-id='7359adad' id='8b6f62cc'/>
     </array-type-def>
     <enum-decl name='zfeature_flags' id='6db816a4'>
       <underlying-type type-id='9cac1fee'/>

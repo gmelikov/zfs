@@ -482,6 +482,7 @@ zap_leaf_lookup_closest(zap_leaf_t *l,
 				bestcd = le->le_cd;
 
 				zeh->zeh_num_integers = le->le_value_numints;
+				zeh->zeh_name_numints = le->le_name_numints;
 				zeh->zeh_integer_size = le->le_value_intlen;
 				zeh->zeh_cd = le->le_cd;
 				zeh->zeh_hash = le->le_hash;

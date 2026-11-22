@@ -398,6 +398,13 @@ This feature becomes
 .Sy active
 when first block is cloned.
 When the last cloned block is freed, it goes back to the enabled state.
+.feature org.openzfs brt_relocation no block_cloning
+This experimental feature tracks block locations in the block reference
+table after relocation.
+It must be enabled explicitly.
+It is active while any relocated block is live and returns to enabled state
+after the last relocated block is freed.
+.
 .feature com.truenas block_cloning_endian yes
 This feature corrects ZAP entry endianness issues in the Block Reference
 Table (BRT) used by block cloning.

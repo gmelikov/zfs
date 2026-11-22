@@ -81,6 +81,7 @@ typedef enum spa_feature {
 	SPA_FEATURE_PHYSICAL_REWRITE,
 	SPA_FEATURE_DRAID_FAIL_DOMAINS,
 	SPA_FEATURE_ANYRAID,
+	SPA_FEATURE_BRT_RELOCATION,
 	SPA_FEATURES
 } spa_feature_t;
 
@@ -105,7 +106,9 @@ typedef enum zfeature_flags {
 	 * from a given feature once support is sufficiently widespread, or
 	 * worries about backwards compatibility are no longer relevant.
 	 */
-	ZFEATURE_FLAG_NO_UPGRADE = 		(1 << 4)
+	ZFEATURE_FLAG_NO_UPGRADE = 		(1 << 4),
+	/* Do not enable this feature by default when creating a pool. */
+	ZFEATURE_FLAG_NO_CREATE =		(1 << 5)
 } zfeature_flags_t;
 
 typedef enum zfeature_type {

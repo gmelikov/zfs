@@ -1003,9 +1003,13 @@ livelist_compare(const void *larg, const void *rarg)
 	if (cmp != 0)
 		return (cmp);
 
-	/* if vdevs are equal, sort by offsets. */
-	return (TREE_CMP(DVA_GET_OFFSET(&l->blk_dva[0]),
-	    DVA_GET_OFFSET(&r->blk_dva[0])));
+	/* If vdevs are equal, sort by offset and physical birth. */
+	cmp = TREE_CMP(DVA_GET_OFFSET(&l->blk_dva[0]),
+	    DVA_GET_OFFSET(&r->blk_dva[0]));
+	if (cmp == 0)
+		cmp = TREE_CMP(BP_GET_PHYSICAL_BIRTH(l),
+		    BP_GET_PHYSICAL_BIRTH(r));
+	return (cmp);
 }
 
 struct livelist_iter_arg {

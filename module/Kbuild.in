@@ -361,6 +361,7 @@ ZFS_OBJS := \
 	dnode_sync.o \
 	dsl_bookmark.o \
 	dsl_crypt.o \
+	dsl_bpr.o \
 	dsl_dataset.o \
 	dsl_deadlist.o \
 	dsl_deleg.o \

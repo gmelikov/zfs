@@ -1097,7 +1097,7 @@ zfs_btree_bulk_finish(zfs_btree_t *tree)
  * Insert value into tree at the location specified by where.
  */
 void
-zfs_btree_add_idx(zfs_btree_t *tree, const void *value,
+zfs_btree_add_idx_unverified(zfs_btree_t *tree, const void *value,
     const zfs_btree_index_t *where)
 {
 	zfs_btree_index_t idx = {0};
@@ -1177,6 +1177,13 @@ zfs_btree_add_idx(zfs_btree_t *tree, const void *value,
 		    (zfs_btree_leaf_t *)new_idx.bti_node, buf, 0);
 		kmem_free(buf, size);
 	}
+}
+
+void
+zfs_btree_add_idx(zfs_btree_t *tree, const void *value,
+    const zfs_btree_index_t *where)
+{
+	zfs_btree_add_idx_unverified(tree, value, where);
 	zfs_btree_verify(tree);
 }
 

@@ -1053,7 +1053,8 @@ fzap_prefetch(zap_name_t *zn)
  */
 
 int
-fzap_cursor_retrieve(zap_t *zap, zap_cursor_t *zc, zap_attribute_t *za)
+fzap_cursor_retrieve(zap_t *zap, zap_cursor_t *zc, zap_attribute_t *za,
+    const zap_cursor_words_t *words)
 {
 	int err;
 	zap_entry_handle_t zeh;
@@ -1127,6 +1128,21 @@ again:
 	if (err == 0) {
 		zc->zc_hash = zeh.zeh_hash;
 		zc->zc_cd = zeh.zeh_cd;
+	}
+	if (err == 0 && words != NULL) {
+		if (zeh.zeh_name_numints != words->zcw_key_words ||
+		    zeh.zeh_integer_size != sizeof (uint64_t) ||
+		    zeh.zeh_num_integers != words->zcw_value_words) {
+			err = SET_ERROR(ECKSUM);
+		} else {
+			err = zap_entry_read_name(zap, &zeh,
+			    words->zcw_key_words * sizeof (uint64_t),
+			    (char *)words->zcw_key);
+			if (err == 0)
+				err = zap_entry_read(&zeh, sizeof (uint64_t),
+				    words->zcw_value_words, words->zcw_value);
+		}
+	} else if (err == 0) {
 		za->za_integer_length = zeh.zeh_integer_size;
 		za->za_num_integers = zeh.zeh_num_integers;
 		if (zeh.zeh_num_integers == 0) {

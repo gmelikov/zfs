@@ -38,6 +38,7 @@
 #include <sys/uberblock_impl.h>
 #include <sys/zfs_context.h>
 #include <sys/avl.h>
+#include <sys/btree.h>
 #include <sys/zfs_refcount.h>
 #include <sys/bplist.h>
 #include <sys/bpobj.h>
@@ -441,6 +442,14 @@ struct spa {
 	brt_dedup_shard_t *spa_brt_dedup;	/* pending dedup'd clones */
 	uint64_t	spa_brt_rangesize;	/* pool's BRT range size */
 	krwlock_t	spa_brt_lock;		/* Protects brt_vdevs/nvdevs */
+	krwlock_t	spa_brt_reloc_lock;
+	struct brt_reloc_shard *spa_brt_reloc_io;
+	zfs_btree_t	spa_brt_reloc;
+	zfs_btree_t	spa_brt_reloc_multi;
+	list_t		spa_brt_retire;
+	uint64_t	spa_brt_reloc_count;
+	krwlock_t	spa_brt_reloc_obj_lock;
+	uint64_t	spa_brt_reloc_obj;
 	kmutex_t	spa_vdev_top_lock;	/* dueling offline/remove */
 	kmutex_t	spa_proc_lock;		/* protects spa_proc* */
 	kcondvar_t	spa_proc_cv;		/* spa_proc_state transitions */

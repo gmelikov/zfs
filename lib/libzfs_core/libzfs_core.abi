@@ -77,6 +77,7 @@
     <elf-symbol name='list_remove_tail' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='list_tail' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='lzc_bookmark' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='lzc_brt_relocate' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='lzc_change_key' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='lzc_channel_program' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='lzc_channel_program_nosync' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
@@ -3447,6 +3448,8 @@
     <pointer-type-def type-id='eaa32e2f' size-in-bits='64' id='63e171df'/>
     <pointer-type-def type-id='3522cd69' size-in-bits='64' id='b65f7fd1'/>
     <pointer-type-def type-id='a5559cdd' size-in-bits='64' id='e4ec4540'/>
+    <qualified-type-def type-id='9c313c2d' const='yes' id='c3b7ba7d'/>
+    <pointer-type-def type-id='c3b7ba7d' size-in-bits='64' id='713a56f5'/>
     <class-decl name='_IO_codecvt' is-struct='yes' visibility='default' is-declaration-only='yes' id='a4036571'/>
     <class-decl name='_IO_marker' is-struct='yes' visibility='default' is-declaration-only='yes' id='010ae0b9'/>
     <class-decl name='_IO_wide_data' is-struct='yes' visibility='default' is-declaration-only='yes' id='79bd3751'/>
@@ -3965,6 +3968,15 @@
     <function-decl name='lzc_bookmark' mangled-name='lzc_bookmark' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='lzc_bookmark'>
       <parameter type-id='5ce45b60' name='bookmarks'/>
       <parameter type-id='857bb57e' name='errlist'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='lzc_brt_relocate' mangled-name='lzc_brt_relocate' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='lzc_brt_relocate'>
+      <parameter type-id='80f4b756' name='pool'/>
+      <parameter type-id='9c313c2d' name='guid'/>
+      <parameter type-id='9c313c2d' name='limit'/>
+      <parameter type-id='713a56f5' name='cursor'/>
+      <parameter type-id='3502e3ff' name='count'/>
+      <parameter type-id='857bb57e' name='result'/>
       <return type-id='95e97e5e'/>
     </function-decl>
     <function-decl name='lzc_get_bookmarks' mangled-name='lzc_get_bookmarks' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='lzc_get_bookmarks'>

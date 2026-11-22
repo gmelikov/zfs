@@ -167,6 +167,7 @@ zap_leaf_phys(zap_leaf_t *l)
 typedef struct zap_entry_handle {
 	/* Set by zap_leaf and public to ZAP */
 	uint64_t zeh_num_integers;
+	uint16_t zeh_name_numints;
 	uint64_t zeh_hash;
 	uint32_t zeh_cd;
 	uint8_t zeh_integer_size;

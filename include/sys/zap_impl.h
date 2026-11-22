@@ -296,7 +296,15 @@ int fzap_update(zap_name_t *zn, int integer_size, uint64_t num_integers,
 int fzap_length(zap_name_t *zn,
     uint64_t *integer_size, uint64_t *num_integers);
 int fzap_remove(zap_name_t *zn, dmu_tx_t *tx);
-int fzap_cursor_retrieve(zap_t *zap, zap_cursor_t *zc, zap_attribute_t *za);
+typedef struct zap_cursor_words {
+	uint64_t *zcw_key;
+	uint64_t *zcw_value;
+	uint64_t zcw_value_words;
+	uint16_t zcw_key_words;
+} zap_cursor_words_t;
+
+int fzap_cursor_retrieve(zap_t *zap, zap_cursor_t *zc, zap_attribute_t *za,
+    const zap_cursor_words_t *words);
 void fzap_get_stats(zap_t *zap, zap_stats_t *zs);
 void zap_put_leaf(struct zap_leaf *l);
 int fzap_add_cd(zap_name_t *zn, uint64_t integer_size, uint64_t num_integers,

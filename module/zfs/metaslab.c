@@ -5831,7 +5831,12 @@ spa_remap_blkptr(spa_t *spa, blkptr_t *bp, spa_remap_cb_t callback, void *arg)
 	uint64_t size = DVA_GET_ASIZE(dva);
 	vdev_t *vd = vdev_lookup_top(spa, DVA_GET_VDEV(dva));
 
-	if (vd->vdev_ops->vdev_op_remap == NULL)
+	/*
+	 * A relocated block still owns its original identity at zero extra
+	 * references. The indirect mapping may cover a different generation.
+	 */
+	if (vd->vdev_ops->vdev_op_remap == NULL ||
+	    brt_reloc_resolve(spa, bp, NULL))
 		return (B_FALSE);
 
 	rbca.rbca_bp = bp;
@@ -6364,6 +6369,10 @@ metaslab_check_free(spa_t *spa, const blkptr_t *bp)
 {
 	if ((zfs_flags & ZFS_DEBUG_ZIO_FREE) == 0)
 		return;
+
+	blkptr_t physical;
+	if (brt_reloc_resolve(spa, bp, &physical))
+		bp = &physical;
 
 	spa_config_enter(spa, SCL_VDEV, FTAG, RW_READER);
 	for (int i = 0; i < BP_GET_NDVAS(bp); i++) {

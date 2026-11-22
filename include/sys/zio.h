@@ -498,12 +498,15 @@ struct zio {
 	enum trim_flag	io_trim_flags;
 	zio_priority_t	io_priority;
 	uint8_t		io_post;
+	boolean_t	io_brt_resolved;
 	uint8_t		io_state[ZIO_WAIT_TYPES];
 	uint64_t	io_txg;
 	spa_t		*io_spa;
 	blkptr_t	*io_bp;
 	blkptr_t	*io_bp_override;
 	blkptr_t	io_bp_copy;
+	struct brt_reloc_shard *io_brt_shard;
+	list_node_t	io_brt_node;
 	list_t		io_parent_list;
 	list_t		io_child_list;
 	zio_t		*io_logical;

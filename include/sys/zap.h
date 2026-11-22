@@ -485,6 +485,13 @@ int zap_cursor_init_serialized_by_dnode(zap_cursor_t *zc, dnode_t *dn,
 int zap_cursor_retrieve(zap_cursor_t *zc, zap_attribute_t *za);
 
 /*
+ * Retrieve an entry from a uint64-key ZAP with exactly the requested
+ * number of key and value words. Returns ECKSUM for an unexpected format.
+ */
+int zap_cursor_retrieve_uint64(zap_cursor_t *zc, uint16_t key_words,
+    uint64_t *key, uint64_t value_words, uint64_t *value);
+
+/*
  * Advance the cursor to the next attribute.
  */
 void zap_cursor_advance(zap_cursor_t *zc);

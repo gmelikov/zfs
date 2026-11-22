@@ -3244,6 +3244,14 @@ dsl_scan_visit(dsl_scan_t *scn, dmu_tx_t *tx)
 	scan_ds_t *sds;
 	dsl_pool_t *dp = scn->scn_dp;
 
+	/*
+	 * A relocated block may have a physical birth newer than all its
+	 * ancestors. Preserve the I/O filter, and visit the older trees.
+	 */
+	uint64_t min_txg = scn->scn_phys.scn_min_txg;
+	if (spa_feature_is_active(dp->dp_spa, SPA_FEATURE_BRT_RELOCATION))
+		min_txg = 0;
+
 	if (scn->scn_phys.scn_ddt_bookmark.ddb_class <=
 	    scn->scn_phys.scn_ddt_class_max) {
 		scn->scn_phys.scn_cur_min_txg = scn->scn_phys.scn_min_txg;
@@ -3309,10 +3317,10 @@ dsl_scan_visit(dsl_scan_t *scn, dmu_tx_t *tx)
 		VERIFY3U(0, ==, dsl_dataset_hold_obj(dp, dsobj, FTAG, &ds));
 		if (txg != 0) {
 			scn->scn_phys.scn_cur_min_txg =
-			    MAX(scn->scn_phys.scn_min_txg, txg);
+			    MAX(min_txg, txg);
 		} else {
 			scn->scn_phys.scn_cur_min_txg =
-			    MAX(scn->scn_phys.scn_min_txg,
+			    MAX(min_txg,
 			    dsl_dataset_phys(ds)->ds_prev_snap_txg);
 		}
 		scn->scn_phys.scn_cur_max_txg = dsl_scan_ds_maxtxg(ds);
@@ -5005,6 +5013,10 @@ dsl_scan_scrub_cb(dsl_pool_t *dp,
 {
 	dsl_scan_t *scn = dp->dp_scan;
 	spa_t *spa = dp->dp_spa;
+	blkptr_t physical;
+	if (brt_reloc_resolve(spa, bp, &physical))
+		bp = &physical;
+
 	uint64_t phys_birth = BP_GET_PHYSICAL_BIRTH(bp);
 	size_t psize = BP_GET_PSIZE(bp);
 	boolean_t needs_io = B_FALSE;
@@ -5477,6 +5489,10 @@ dsl_scan_freed(spa_t *spa, const blkptr_t *bp)
 	ASSERT(scn != NULL);
 	if (!dsl_scan_is_running(scn))
 		return;
+
+	blkptr_t physical;
+	if (brt_reloc_resolve(spa, bp, &physical))
+		bp = &physical;
 
 	for (int i = 0; i < BP_GET_NDVAS(bp); i++)
 		dsl_scan_freed_dva(spa, bp, i);

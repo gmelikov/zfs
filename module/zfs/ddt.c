@@ -21,6 +21,7 @@
 #include <sys/spa.h>
 #include <sys/spa_impl.h>
 #include <sys/zio.h>
+#include <sys/brt.h>
 #include <sys/ddt.h>
 #include <sys/ddt_impl.h>
 #include <sys/zap.h>
@@ -2034,6 +2035,10 @@ ddt_repair_entry(ddt_t *ddt, ddt_entry_t *dde, ddt_entry_t *rdde, zio_t *rio)
 			continue;
 
 		ddt_bp_create(ddt->ddt_checksum, ddk, ddp, v, &blk);
+		/* Sync waits for repairs before BRT can retire the mapping. */
+		blkptr_t physical;
+		if (brt_reloc_resolve(zio->io_spa, &blk, &physical))
+			blk = physical;
 		zio_nowait(zio_rewrite(zio, zio->io_spa, 0, &blk,
 		    rdde->dde_io->dde_repair_abd, DDK_GET_PSIZE(rddk),
 		    NULL, NULL, ZIO_PRIORITY_SYNC_WRITE,
